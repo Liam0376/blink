@@ -1,0 +1,59 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# graphify skill output (not part of the app; Tailwind's content scanner
+# must skip it too — see graphify-out.bak/ below)
+/graphify-out/
+/graphify-out.bak/
+/.next-root-owned-orphan-*/
+
+# isolated worktrees + superpowers SDD scratch (never part of the app)
+/.worktrees/
+/.superpowers/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# claude code runtime state (scheduled_tasks.lock etc.)
+/.claude/
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+.neon
+
+# neon CLI agent tooling (not app code)
+/.agents/
+/skills-lock.json

@@ -1,0 +1,260 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  /* Without this, Safari/WebKit renders native form controls (input,
+     select, textarea text/caret) with their light-mode UA defaults —
+     often black text — regardless of this page's own dark CSS variables,
+     since color-scheme is the only thing that tells the browser which
+     native palette to use. */
+  color-scheme: light;
+  --background: #fafaf9;
+  --foreground: #18181b;
+  --card: #ffffff;
+  --card-border: rgba(0, 0, 0, 0.06);
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.03);
+  --accent: #7c3aed;
+  --accent-light: #ede9fe;
+  --accent-glow: rgba(124, 58, 237, 0.12);
+  --muted: #71717a;
+  --surface: #f4f4f5;
+  --nav-bg: rgba(255, 255, 255, 0.85);
+  --nav-border: rgba(0, 0, 0, 0.06);
+  /* iOS 27 home-screen web apps draw a system blur over the status bar plus a
+     fade below it, over whatever the page paints there. No page CSS turns it
+     off: theme-color is ignored, the status-bar-style meta is inert, and a
+     fixed, in-flow or absent bar all blur identically. The only lever is
+     keeping text out of the band, so the header adds this gap.
+
+     Band height, reverse-engineered. Apple documents none of it and ships no
+     API to query or disable it. Best on-device measurement (Yeraze/meshmonitor
+     #5286, 2026): the safe-area inset plus a ~20px fade. Header text lands at
+     inset + 0.5rem + gap, so a 12px gap is the wall, 20px is the practical
+     floor, and 24px leaves 12px of margin on a 62pt-inset phone. Size is the
+     only knob: raise it if the header fogs again on a future iOS.
+
+     Applied unconditionally. Gating it on navigator.standalone silently
+     no-ops, because that reports false for a real iOS 27 home-screen app, and
+     the same project lost a round to exactly that invisible failure. A
+     constant cannot fail that way. Cost is 24px of extra top padding in a
+     Safari tab, which is cheaper than a fogged header. */
+  --status-bar-blur-gap: 24px;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+.dark {
+  color-scheme: dark;
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #18181b;
+  --card-border: rgba(255, 255, 255, 0.06);
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.2);
+  --accent: #a78bfa;
+  --accent-light: rgba(139, 92, 246, 0.12);
+  --accent-glow: rgba(139, 92, 246, 0.15);
+  --muted: #a1a1aa;
+  --surface: #27272a;
+  --nav-bg: rgba(9, 9, 11, 0.85);
+  --nav-border: rgba(255, 255, 255, 0.06);
+}
+
+/* Theme is class-only. The pre-paint script in app/layout.tsx resolves the
+   saved preference (or the device preference on first run) and toggles
+   `.dark`; the effect in app/page.tsx keeps it in sync afterwards. A
+   `@media (prefers-color-scheme: dark)` fallback for these variables must
+   NOT come back: it keyed on `:root:not(.light)` and nothing ever adds
+   `.light`, so on a dark-mode device it re-applied the dark variables even
+   after the toggle removed `.dark` — the switch looked dead. Tailwind's own
+   `dark:` utilities are already class-gated (`@custom-variant` above), so a
+   media-query fallback would only ever theme half the app anyway. */
+
+html {
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button {
+  transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.2s ease, opacity 0.15s ease;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes sheet-in {
+  from { transform: translateY(100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes toast-in {
+  from { transform: translate(-50%, 16px) scale(0.95); opacity: 0; }
+  to { transform: translate(-50%, 0) scale(1); opacity: 1; }
+}
+
+@keyframes tab-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes number-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+  50% { box-shadow: 0 0 0 8px transparent; }
+}
+
+.animate-fade-in { animation: fade-in 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
+.animate-sheet-in { animation: sheet-in 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+.animate-toast-in { animation: toast-in 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+.animate-tab-in { animation: tab-in 0.35s cubic-bezier(0.22, 1, 0.36, 1); }
+.animate-slide-up { animation: slide-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-scale-in { animation: scale-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-number-in { animation: number-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-glow-pulse { animation: glow-pulse 2s ease-in-out infinite; }
+
+.stagger-1 { animation-delay: 0.03s; }
+.stagger-2 { animation-delay: 0.06s; }
+.stagger-3 { animation-delay: 0.09s; }
+.stagger-4 { animation-delay: 0.12s; }
+.stagger-5 { animation-delay: 0.15s; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.pt-safe {
+  /* calc(), not a bare pt-* utility alongside this: two padding-top
+     declarations on one element don't stack, the cascade just picks one
+     and the other's spacing is silently lost (bit us on the header, which
+     hugged the notch on iOS with no breathing room below the safe area). */
+  padding-top: calc(env(safe-area-inset-top) + 0.5rem + var(--status-bar-blur-gap));
+}
+
+input,
+select,
+textarea {
+  font-size: 16px;
+  /* iOS Safari can render form-control text with its own UA text color
+     independent of `color`/`color-scheme` (most visible on inputs with a
+     transparent background sitting on this app's dark surface — the text
+     stayed black regardless of the dark theme). Force it to actually track
+     the theme, on top of color-scheme. */
+  color: var(--foreground);
+  -webkit-text-fill-color: var(--foreground);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  box-shadow: var(--card-shadow);
+  border-radius: 1rem;
+  transition: box-shadow 0.25s ease, transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.card-hero {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  box-shadow: var(--card-shadow), 0 0 0 1px var(--accent-glow);
+  border-radius: 1.25rem;
+  position: relative;
+  overflow: hidden;
+}
+.card-hero::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent), transparent 80%);
+  opacity: 0.6;
+  border-radius: 1.25rem 1.25rem 0 0;
+}
+
+.glass-nav {
+  background: var(--nav-bg);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-top: 1px solid var(--nav-border);
+}
+
+.press {
+  transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.press:active {
+  transform: scale(0.97);
+}
+
+.label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.tx-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--card-border);
+}
+.tx-row:last-child {
+  border-bottom: none;
+}
+
+.nav-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  transition: opacity 0.2s ease;
+}
