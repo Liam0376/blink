@@ -83,48 +83,79 @@ export function growBalance(balance: number, roiAnnualPct: number | undefined, s
   return roundCents(balance * Math.pow(1 + roiAnnualPct / 100, years));
 }
 
-/** Most recent date this wallet was touched by a transaction (as source or
- * transfer destination), falling back to openingDate then createdAt — the
- * growth clock for growBalance starts from whichever is most recent. */
-export function lastActivityDate(
-  wallet: Pick<Wallet, "id" | "openingDate" | "createdAt">,
-  transactions: Pick<Transaction, "walletId" | "toWalletId" | "date">[]
-): Date {
-  let latest = new Date(wallet.openingDate || wallet.createdAt);
-  for (const t of transactions) {
-    if (t.walletId !== wallet.id && t.toWalletId !== wallet.id) continue;
-    const d = new Date(t.date);
-    if (d > latest) latest = d;
-  }
-  return latest;
-}
-
 /**
  * Apply ROI growth (see growBalance) on top of ledger balances, for every
  * wallet that has roiAnnualPct set. Wallets without it pass through
  * unchanged. `now` is injectable for tests.
+ *
+ * Interest accrues one day at a time on the balance actually held that day,
+ * the way a bank credits it. An earlier version anchored the whole
+ * projection to the newest transaction on the wallet, so logging a coffee
+ * reset the clock and a year of accrued interest vanished.
+ *
+ * The daily factor is the 365th root of the annual one, so a balance left
+ * untouched for a year still grows by exactly the annual rate.
+ *
+ * The ledger is unwound from the current balance to find what was there at
+ * the start of the window, which keeps this function's answer consistent
+ * with the balances map it is handed.
  */
 export function computeGrownBalances(
   wallets: Pick<Wallet, "id" | "roiAnnualPct" | "roiRateSince" | "openingDate" | "createdAt">[],
   balances: Map<string, number>,
-  transactions: Pick<Transaction, "walletId" | "toWalletId" | "date">[],
+  transactions: Pick<Transaction, "type" | "amount" | "walletId" | "toWalletId" | "date">[],
   now: Date = new Date()
 ): Map<string, number> {
   const grown = new Map(balances);
+  const today = localDayStart(now);
+
   for (const w of wallets) {
-    if (!w.roiAnnualPct || w.id == null) continue;
-    const bal = balances.get(w.id) ?? 0;
-    // Anchor to whichever is more recent: the last real transaction, or the
-    // last time this rate was set/changed. Without the latter, changing the
-    // rate (e.g. 13% -> 7%) would retroactively re-price every day already
-    // elapsed since the last transaction at the NEW rate, silently altering
-    // interest already shown for days that earned the OLD rate.
-    let since = lastActivityDate(w, transactions);
+    if (!w.roiAnnualPct || w.roiAnnualPct <= 0 || w.id == null) continue;
+
+    // Growth never starts before the rate did, so a rate change stays
+    // prospective: days already elapsed under the old rate are not re-priced.
+    let start = new Date(w.openingDate || w.createdAt);
     if (w.roiRateSince) {
       const rateSince = new Date(w.roiRateSince);
-      if (rateSince > since) since = rateSince;
+      if (!Number.isNaN(rateSince.getTime()) && rateSince > start) start = rateSince;
     }
-    grown.set(w.id, growBalance(bal, w.roiAnnualPct, since, now));
+    const startDay = localDayStart(start);
+    if (Number.isNaN(startDay) || today <= startDay) continue;
+
+    // Signed movement per local day, for this wallet only.
+    const byDay = new Map<number, number>();
+    for (const t of transactions) {
+      if (!Number.isFinite(t.amount) || t.amount === 0) continue;
+      let delta = 0;
+      if (t.type === "expense") {
+        if (t.walletId === w.id) delta -= t.amount;
+      } else if (t.type === "income") {
+        if (t.walletId === w.id) delta += t.amount;
+      } else {
+        if (t.walletId === w.id) delta -= t.amount;
+        if (t.toWalletId === w.id) delta += t.amount;
+      }
+      if (delta === 0) continue;
+      const day = localDayStart(new Date(t.date));
+      if (Number.isNaN(day)) continue;
+      byDay.set(day, (byDay.get(day) ?? 0) + delta);
+    }
+
+    // Unwind to the opening balance for the start of the window.
+    let balance = balances.get(w.id) ?? 0;
+    for (const [day, delta] of byDay) if (day >= startDay) balance -= delta;
+
+    const dailyFactor = Math.pow(1 + w.roiAnnualPct / 100, 1 / DAYS_PER_YEAR);
+    const cursor = new Date(startDay);
+    while (localDayStart(cursor) < today) {
+      balance += byDay.get(localDayStart(cursor)) ?? 0;
+      if (balance > 0) balance *= dailyFactor;
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    // Today's movements are real but have not earned a day yet.
+    balance += byDay.get(today) ?? 0;
+
+    grown.set(w.id, roundCents(balance));
   }
   return grown;
 }

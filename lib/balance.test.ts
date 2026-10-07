@@ -6,7 +6,6 @@ import {
   computeCashback,
   computeGrownBalances,
   growBalance,
-  lastActivityDate,
   lastCutDate,
   creditsSinceCut,
   netWorthFromBalances,
@@ -298,31 +297,6 @@ describe("growBalance (ROI display projection)", () => {
   });
 });
 
-describe("lastActivityDate", () => {
-  it("falls back to openingDate, then createdAt, when there's no matching transaction", () => {
-    expect(
-      lastActivityDate({ id: "w1", openingDate: "2025-06-01", createdAt: "2025-01-01" }, [])
-    ).toEqual(new Date("2025-06-01"));
-    expect(lastActivityDate({ id: "w1", createdAt: "2025-01-01" }, [])).toEqual(new Date("2025-01-01"));
-  });
-
-  it("picks the most recent transaction touching the wallet as source or transfer destination", () => {
-    const d = lastActivityDate({ id: "w1", createdAt: "2020-01-01" }, [
-      { walletId: "w1", date: "2025-03-01" },
-      { walletId: "w2", toWalletId: "w1", date: "2025-08-15" },
-      { walletId: "w1", date: "2025-05-01" },
-    ]);
-    expect(d).toEqual(new Date("2025-08-15"));
-  });
-
-  it("ignores transactions that don't reference the wallet at all", () => {
-    const d = lastActivityDate({ id: "w1", createdAt: "2020-01-01" }, [
-      { walletId: "w99", toWalletId: "w98", date: "2025-08-15" },
-    ]);
-    expect(d).toEqual(new Date("2020-01-01"));
-  });
-});
-
 describe("computeGrownBalances", () => {
   it("leaves wallets without roiAnnualPct untouched", () => {
     const balances = new Map([["w1", 1000]]);
@@ -335,7 +309,7 @@ describe("computeGrownBalances", () => {
     const grown = computeGrownBalances(
       [{ id: "w1", roiAnnualPct: 13, createdAt: "2025-01-01" }],
       balances,
-      [{ walletId: "w1", date: "2025-01-01" }],
+      [{ type: "income" as const, amount: 0, walletId: "w1", date: "2025-01-01" }],
       new Date("2026-01-01")
     );
     expect(grown.get("w1")).toBeCloseTo(1130, 2);
@@ -355,7 +329,7 @@ describe("computeGrownBalances", () => {
     const grown = computeGrownBalances(
       [{ id: "w1", roiAnnualPct: 7, roiRateSince: "2026-01-31", createdAt: "2025-01-01" }],
       balances,
-      [{ walletId: "w1", date: "2026-01-01" }],
+      [{ type: "income" as const, amount: 0, walletId: "w1", date: "2026-01-01" }],
       new Date("2026-01-31") // same instant as the rate change - zero days at the new rate yet
     );
     expect(grown.get("w1")).toBe(1000);
@@ -367,12 +341,55 @@ describe("computeGrownBalances", () => {
     const grown = computeGrownBalances(
       [{ id: "w1", roiAnnualPct: 7, roiRateSince: "2026-01-31", createdAt: "2025-01-01" }],
       balances,
-      [{ walletId: "w1", date: "2026-01-01" }],
+      [{ type: "income" as const, amount: 0, walletId: "w1", date: "2026-01-01" }],
       new Date("2026-02-10")
     );
     // 10 days at 7%/yr on 1000, not 40 days (Jan 1 -> Feb 10) at 7%.
     const expected = 1000 * Math.pow(1.07, 10 / 365);
     expect(grown.get("w1")).toBeCloseTo(expected, 2);
+  });
+
+  it("keeps interest already earned when a transaction happens today", () => {
+    // 1000 held since Jan 1, then 100 spent today. Interest accrued on the
+    // 1000 for the 30 days it was actually there must survive: anchoring the
+    // growth clock to the newest transaction would show a flat 900.
+    const balances = new Map([["w1", 900]]);
+    const grown = computeGrownBalances(
+      [{ id: "w1", roiAnnualPct: 13, createdAt: "2026-01-01" }],
+      balances,
+      [{ type: "expense", amount: 100, walletId: "w1", date: "2026-01-31" }],
+      new Date("2026-01-31")
+    );
+    expect(grown.get("w1")!).toBeCloseTo(1000 * Math.pow(1.13, 30 / 365) - 100, 2);
+  });
+
+  it("does not earn interest on money that only arrived today", () => {
+    const balances = new Map([["w1", 11000]]);
+    const grown = computeGrownBalances(
+      [{ id: "w1", roiAnnualPct: 13, createdAt: "2026-01-01" }],
+      balances,
+      [{ type: "income", amount: 10000, walletId: "w1", date: "2026-01-31" }],
+      new Date("2026-01-31")
+    );
+    // The 10000 landed today, so only the 1000 that sat for 30 days earns.
+    expect(grown.get("w1")!).toBeCloseTo(1000 * Math.pow(1.13, 30 / 365) + 10000, 2);
+  });
+
+  it("accrues across a mid-window withdrawal instead of restarting", () => {
+    const balances = new Map([["w1", 1000]]);
+    const grown = computeGrownBalances(
+      [{ id: "w1", roiAnnualPct: 13, createdAt: "2026-01-01" }],
+      balances,
+      [
+        { type: "expense", amount: 500, walletId: "w1", date: "2026-01-16" },
+        { type: "income", amount: 500, walletId: "w1", date: "2026-01-20" },
+      ],
+      new Date("2026-01-31")
+    );
+    // 15 days on 1000, then 4 days on 500, then 11 days on 1000 again.
+    const f = Math.pow(1.13, 1 / 365);
+    const expected = ((1000 * Math.pow(f, 15) - 500) * Math.pow(f, 4) + 500) * Math.pow(f, 11);
+    expect(grown.get("w1")!).toBeCloseTo(expected, 2);
   });
 });
 
