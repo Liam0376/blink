@@ -80,13 +80,23 @@ export const TransactionList = memo(function TransactionList({
           `${w?.name ?? "(deleted account)"}${w?.last4 ? ` •${w.last4}` : ""}`,
           new Date(t.date).toLocaleString("en-US", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }),
         ].filter(Boolean).join(" · ");
+        // Dated ahead of today: it is in the ledger but deliberately kept out
+        // of the balance, so say so rather than let it look like a bug.
+        const isFuture = new Date(t.date).getTime() > Date.now();
         return (
           <li key={t.id} className="tx-row" onClick={() => onEdit?.(t)} style={onEdit ? { cursor: "pointer" } : undefined}>
             <span className="w-9 h-9 rounded-xl flex items-center justify-center text-base shrink-0" style={{ background: "var(--surface)" }} aria-hidden>
               {isTransfer ? "⇄" : (c?.icon ?? (t.type === "income" ? "💰" : "💸"))}
             </span>
             <div className="flex-1 min-w-0">
-              <p className="text-[13px] font-semibold truncate">{primaryLabel}</p>
+              <p className="text-[13px] font-semibold truncate">
+                {primaryLabel}
+                {isFuture && (
+                  <span className="ml-1.5 text-[10px] font-bold text-amber-600 dark:text-amber-400" title="Dated in the future — not counted in the balance yet">
+                    SCHEDULED
+                  </span>
+                )}
+              </p>
               <p className="text-[11px] truncate" style={{ color: "var(--muted)" }}>
                 {secondaryParts}
               </p>
