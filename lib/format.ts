@@ -497,7 +497,10 @@ export function parseTransactionsCSV(
     // Resolve category by name (only for expense/income, not transfer)
     let categoryId: string | undefined = undefined;
     if (type !== "transfer" && categoryStr) {
-      const categoryMatch = resolveUnique(categoryStr, categories);
+      // Scope to the row's kind: "Salary" is income-only, so an expense row
+      // naming it must fail rather than quietly tag itself with it.
+      const scoped = categories.filter((c) => c.kind === (type as "expense" | "income"));
+      const categoryMatch = resolveUnique(categoryStr, scoped);
       if (categoryMatch === "ambiguous") {
         errors.push(`Row ${rowNum + 1}: "${categoryStr}" matches more than one category — rename one to import this row`);
         continue;

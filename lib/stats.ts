@@ -263,6 +263,15 @@ export function advanceRecurring(
  * should deactivate it). Pure — callers (manual "log now" and the
  * auto-log-on-open effect) do the actual transaction/DB writes.
  */
+/** A recurring item is due when it is still active and its date has passed. */
+export function isRecurringDue(
+  item: { active?: boolean; nextDate: string },
+  now: Date
+): boolean {
+  if (item.active === false) return false;
+  return !(new Date(item.nextDate) > now);
+}
+
 export function advanceRecurringPastNow(
   nextDate: Date,
   frequency: "weekly" | "monthly" | "yearly",

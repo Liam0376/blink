@@ -187,6 +187,12 @@ export function WalletManager({ wallets, balances }: { wallets: Wallet[]; balanc
     const cashbackPct = kind === "card" && hasCashback && Number.isFinite(cbNum) && cbNum > 0 ? cbNum : undefined;
     const cbOpenNum = Number(cashbackOpeningStr);
     const cashbackOpening = kind === "card" && hasCashback && Number.isFinite(cbOpenNum) && cbOpenNum > 0 ? cbOpenNum : undefined;
+    // Once posted as a transaction the baseline is frozen; changing it here
+    // would make the card's total disagree with the balance.
+    if (editing?.cashbackOpeningApplied && cashbackOpening !== editing.cashbackOpening) {
+      setError("This card's cashback baseline has already been posted, so it can't change.");
+      return;
+    }
     // For a card, "opening balance" is entered as a positive "amount owed" —
     // store it negative so it correctly reduces (not inflates) net worth.
     // Non-card wallets keep the raw signed value (what's actually in them).
@@ -381,7 +387,7 @@ export function WalletManager({ wallets, balances }: { wallets: Wallet[]; balanc
             {hasRoi && (
               <div className="flex items-center gap-2">
                 <label htmlFor="wm-roi" className="text-xs text-zinc-500 shrink-0">Annual rate (%)</label>
-                <input id="wm-roi" value={roiPct} onChange={(e) => setRoiPct(e.target.value.replace(/[^0-9.]/g, ""))} inputMode="decimal" placeholder="e.g. 13" className="flex-1 rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm min-h-[44px]" />
+                <input id="wm-roi" value={roiPct} onChange={(e) => setRoiPct(e.target.value.replace(/[^0-9.]/g, ""))} inputMode="decimal" placeholder="e.g. 13" className="flex-1 rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm min-h-[44px] disabled:opacity-60" />
               </div>
             )}
           </div>
@@ -418,13 +424,13 @@ export function WalletManager({ wallets, balances }: { wallets: Wallet[]; balanc
             {hasCashback && (
               <div className="flex items-center gap-2">
                 <label htmlFor="wm-cashback" className="text-xs text-zinc-500 shrink-0">Cashback rate (%)</label>
-                <input id="wm-cashback" value={cashbackPctStr} onChange={(e) => setCashbackPctStr(e.target.value.replace(/[^0-9.]/g, ""))} inputMode="decimal" placeholder="e.g. 2" className="flex-1 rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm min-h-[44px]" />
+                <input id="wm-cashback" value={cashbackPctStr} onChange={(e) => setCashbackPctStr(e.target.value.replace(/[^0-9.]/g, ""))} inputMode="decimal" placeholder="e.g. 2" className="flex-1 rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm min-h-[44px] disabled:opacity-60" />
               </div>
             )}
             {hasCashback && (
               <div className="flex items-center gap-2">
                 <label htmlFor="wm-cashback-opening" className="text-xs text-zinc-500 shrink-0">Already earned (optional)</label>
-                <input id="wm-cashback-opening" value={cashbackOpeningStr} onChange={(e) => setCashbackOpeningStr(sanitizeAmountInput(e.target.value, { allowNegative: false }))} inputMode="decimal" placeholder="0" className="flex-1 rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm min-h-[44px]" />
+                <input id="wm-cashback-opening" value={cashbackOpeningStr} disabled={!!editing?.cashbackOpeningApplied} onChange={(e) => setCashbackOpeningStr(sanitizeAmountInput(e.target.value, { allowNegative: false }))} inputMode="decimal" placeholder="0" className="flex-1 rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm min-h-[44px] disabled:opacity-60" />
               </div>
             )}
             {hasCashback && Number(cashbackPctStr) > 0 && (
@@ -997,7 +1003,7 @@ export function BudgetManager({ budgets, categories, wallets }: { budgets: Budge
       <div id="budget-form" className="p-3 rounded-2xl bg-zinc-50 dark:bg-zinc-900 space-y-2">
         <input value={label} maxLength={40} onChange={(e) => setLabel(e.target.value)} placeholder="E.g. Food for the month" aria-label="Budget name" className="w-full rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm outline-none min-h-[44px]" />
         <div className="flex gap-2">
-          <input value={limit} onChange={(e) => setLimit(sanitizeAmountInput(e.target.value))} inputMode="decimal" placeholder="Limit" aria-label="Limit" className="flex-1 rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm min-h-[44px]" />
+          <input value={limit} onChange={(e) => setLimit(sanitizeAmountInput(e.target.value))} inputMode="decimal" placeholder="Limit" aria-label="Limit" className="flex-1 rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm min-h-[44px] disabled:opacity-60" />
           <select value={period} onChange={(e) => setPeriod(e.target.value as Budget["period"])} aria-label="Period" className="rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-2 py-2.5 text-sm min-h-[44px]">
             <option value="week">Weekly</option>
             <option value="month">Monthly</option>
@@ -1132,7 +1138,7 @@ export function DebtManager({ debts, wallets }: { debts: Debt[]; wallets: Wallet
       ) : (
       <div id="debt-form" className="p-3 rounded-2xl bg-zinc-50 dark:bg-zinc-900 space-y-2">
         <div className="flex gap-2">
-          <input value={person} maxLength={30} onChange={(e) => setPerson(e.target.value)} placeholder="Who? (first name)" aria-label="Person" className="flex-1 rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm min-h-[44px]" />
+          <input value={person} maxLength={30} onChange={(e) => setPerson(e.target.value)} placeholder="Who? (first name)" aria-label="Person" className="flex-1 rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm min-h-[44px] disabled:opacity-60" />
           <input value={amount} onChange={(e) => setAmount(sanitizeAmountInput(e.target.value))} inputMode="decimal" placeholder="Amount" aria-label="Amount" className="w-28 rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm min-h-[44px]" />
         </div>
         <div className="flex gap-2">
@@ -1318,7 +1324,7 @@ export function RecurringManager({ items, wallets, categories }: { items: Recurr
       ) : (
       <div id="recurring-form" className="p-3 rounded-2xl bg-zinc-50 dark:bg-zinc-900 space-y-2">
         <div className="flex gap-2">
-          <input value={label} maxLength={40} onChange={(e) => setLabel(e.target.value)} placeholder="E.g. Rent, Netflix" aria-label="Name" className="flex-1 rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm min-h-[44px]" />
+          <input value={label} maxLength={40} onChange={(e) => setLabel(e.target.value)} placeholder="E.g. Rent, Netflix" aria-label="Name" className="flex-1 rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm min-h-[44px] disabled:opacity-60" />
           <input value={amount} onChange={(e) => setAmount(sanitizeAmountInput(e.target.value))} inputMode="decimal" placeholder="Amount" aria-label="Amount" className="w-24 rounded-xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none bg-transparent px-3 py-2.5 text-sm min-h-[44px]" />
         </div>
         <div className="flex gap-2">

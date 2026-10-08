@@ -29,6 +29,11 @@ export function matchWallet(q: string | null | undefined, wallets: Wallet[]): Wa
   );
 }
 
+/**
+ * Match a category by name within its kind. No cross-kind fallback: an
+ * expense tagged with an income category imports cleanly and then quietly
+ * corrupts that category's spend and budget numbers, so a miss stays a miss.
+ */
 export function matchCategory(
   q: string | null | undefined,
   categories: Category[],
@@ -36,8 +41,5 @@ export function matchCategory(
 ): Category | undefined {
   if (!q) return undefined;
   const n = normText(q);
-  return (
-    categories.find((c) => c.kind === kind && normText(c.name) === n) ??
-    categories.find((c) => normText(c.name) === n)
-  );
+  return categories.find((c) => c.kind === kind && normText(c.name) === n);
 }

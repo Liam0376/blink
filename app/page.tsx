@@ -14,6 +14,7 @@ import {
   localDayKey,
   spendByTopLevel,
   type StatsRange,
+  isRecurringDue,
 } from "@/lib/stats";
 import { normText } from "@/lib/shortcut";
 import { newId } from "@/lib/sync/ids";
@@ -161,7 +162,7 @@ export default function App() {
     if (!ready) return;
     const now = new Date();
     const due = recurring.filter(
-      (r) => r.active !== false && r.id != null && !recurringAutoLogging.current.has(r.id!) && !(new Date(r.nextDate) > now)
+      (r) => r.id != null && isRecurringDue(r, now) && !recurringAutoLogging.current.has(r.id!)
     );
     if (due.length === 0) return;
     let cancelled = false;
@@ -193,8 +194,14 @@ export default function App() {
           const nowIso = now.toISOString();
           // One IndexedDB transaction: a crash between the add and the
           // update can no longer duplicate the occurrence on next open.
+          let posted = false;
           await db.transaction("rw", [db.transactions, db.recurring], async () => {
-            const amt = roundCents(r.amount);
+            // Re-read inside the transaction: the render that built `due`
+            // used a snapshot, so a second tab can advance this row between
+            // the render and the lock — and then both would post it.
+            const fresh = await db.recurring.get(id);
+            if (!fresh || !isRecurringDue(fresh, now)) return;
+            const amt = roundCents(fresh.amount);
             const cashbackEarned = computeCashback(r.type, amt, w);
             const txId = newId();
             await db.transactions.add({
@@ -208,8 +215,9 @@ export default function App() {
             if (credit) await db.transactions.add({ ...credit, id: newId(), createdAt: nowIso });
             const { nextDate, ended } = advanceRecurringPastNow(new Date(r.nextDate), r.frequency, r.anchorDay, now, r.endDate);
             await db.recurring.update(id, ended ? { nextDate: nextDate.toISOString(), active: false } : { nextDate: nextDate.toISOString() });
+            posted = true;
           });
-          setToast(`Logged automatically: ${r.label} · ${fmtMoney(r.amount, w.currency)}`);
+          if (posted) setToast(`Logged automatically: ${r.label} · ${fmtMoney(r.amount, w.currency)}`);
         } catch (err) {
           console.error("auto-log recurring failed:", err);
         } finally {

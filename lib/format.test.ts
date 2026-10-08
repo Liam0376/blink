@@ -4,7 +4,10 @@ import {
   fmtMoney,
   importJSON,
   orderedCurrencyOptions,
+  MAX_CASHBACK_PCT,
+  MAX_ROI_PCT,
   parseBackup,
+  parsePercentInput,
   parseTransactionsCSV,
   prettyDay,
   roundCents,
@@ -878,6 +881,49 @@ describe("parseTransactionsCSV", () => {
     expect(errors).toContainEqual(expect.stringMatching(/Row 4.*positive/i));
   });
 
+  it("rejects a row whose wallet name matches more than one account", () => {
+    const dupes = [
+      ...mockWallets,
+      { id: "w9", name: "Cash", currency: "USD", kind: "cash" as const, color: "green", createdAt: "2026-01-01" },
+    ];
+    const csv = 'date,type,amount,currency,wallet,to_wallet,category,note\n"2026-09-01","expense","100","USD","Cash","","Food","x"';
+    const { transactions, errors } = parseTransactionsCSV(csv, dupes, mockCategories);
+    expect(transactions).toHaveLength(0);
+    expect(errors[0]).toMatch(/more than one account/i);
+  });
+
+  it("rejects a row whose wallet name only differs by accents or case", () => {
+    const folded = [
+      ...mockWallets,
+      { id: "w9", name: "cAsH", currency: "USD", kind: "cash" as const, color: "green", createdAt: "2026-01-01" },
+    ];
+    const csv = 'date,type,amount,currency,wallet,to_wallet,category,note\n"2026-09-01","expense","100","USD","Cash","","Food","x"';
+    const { transactions, errors } = parseTransactionsCSV(csv, folded, mockCategories);
+    expect(transactions).toHaveLength(0);
+    expect(errors[0]).toMatch(/more than one account/i);
+  });
+
+  it("still imports when exactly one account matches", () => {
+    const csv = 'date,type,amount,currency,wallet,to_wallet,category,note\n"2026-09-01","expense","100","USD","Cash","","Food","x"';
+    const { transactions, errors } = parseTransactionsCSV(csv, mockWallets, mockCategories);
+    expect(errors).toHaveLength(0);
+    expect(transactions).toHaveLength(1);
+  });
+
+  it("rejects an expense row that names an income-only category", () => {
+    const csv = 'date,type,amount,currency,wallet,to_wallet,category,note\n"2026-09-01","expense","100","USD","Cash","","Salary","x"';
+    const { transactions, errors } = parseTransactionsCSV(csv, mockWallets, mockCategories);
+    expect(transactions).toHaveLength(0);
+    expect(errors[0]).toMatch(/not found for type "expense"/i);
+  });
+
+  it("still matches the category when the kind agrees", () => {
+    const csv = 'date,type,amount,currency,wallet,to_wallet,category,note\n"2026-09-01","income","100","USD","Cash","","Salary","x"';
+    const { transactions, errors } = parseTransactionsCSV(csv, mockWallets, mockCategories);
+    expect(errors).toHaveLength(0);
+    expect(transactions[0].categoryId).toBe("c9");
+  });
+
   it("handles malformed CSV gracefully (returns errors, doesn't throw)", () => {
     const malformed = 'date,type,amount,currency,wallet,to_wallet,category,note\n"2026-09-01","expense","100"';
     expect(() => {
@@ -952,10 +998,38 @@ describe("restore hardening (integrity audit)", () => {
     }
   });
 
+  it("parsePercentInput refuses a rate above the ceiling instead of dropping it", () => {
+    expect(parsePercentInput("2", MAX_CASHBACK_PCT)).toEqual({ pct: 2, tooHigh: false });
+    expect(parsePercentInput("", MAX_CASHBACK_PCT)).toEqual({ tooHigh: false });
+    expect(parsePercentInput("0", MAX_CASHBACK_PCT)).toEqual({ tooHigh: false });
+    expect(parsePercentInput("-5", MAX_CASHBACK_PCT)).toEqual({ tooHigh: false });
+    expect(parsePercentInput("abc", MAX_CASHBACK_PCT)).toEqual({ tooHigh: false });
+    expect(parsePercentInput("100", MAX_CASHBACK_PCT)).toEqual({ pct: 100, tooHigh: false });
+    expect(parsePercentInput("200", MAX_CASHBACK_PCT).tooHigh).toBe(true);
+    expect(parsePercentInput("99999", MAX_ROI_PCT).tooHigh).toBe(true);
+    expect(parsePercentInput("13", MAX_ROI_PCT)).toEqual({ pct: 13, tooHigh: false });
+  });
+
   it("parseBackup rejects a malformed wallet currency", () => {
     const obj = JSON.parse(validBackupJSON()) as Record<string, unknown>;
     (obj.wallets as Record<string, unknown>[])[0].currency = "usd";
     expect(() => parseBackup(JSON.stringify(obj))).toThrow(/invalid currency/i);
+  });
+
+  it("parseBackup rejects a missing or non-string currency, not just a malformed one", () => {
+    for (const bad of [undefined, 42, null]) {
+      const obj = JSON.parse(validBackupJSON()) as Record<string, unknown>;
+      (obj.wallets as Record<string, unknown>[])[0].currency = bad;
+      expect(() => parseBackup(JSON.stringify(obj))).toThrow(/invalid currency/i);
+    }
+  });
+
+  it("parseBackup checks the currency on every table that has one", () => {
+    for (const table of ["transactions", "budgets", "debts", "recurring"]) {
+      const obj = JSON.parse(validBackupJSON()) as Record<string, unknown>;
+      delete ((obj[table] as Record<string, unknown>[])[0] as Record<string, unknown>).currency;
+      expect(() => parseBackup(JSON.stringify(obj))).toThrow(/invalid currency/i);
+    }
   });
 
   it("parseBackup dedupes repeated ids, keeping the first row", () => {

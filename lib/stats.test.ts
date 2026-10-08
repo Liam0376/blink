@@ -10,6 +10,7 @@ import {
   spendByTopLevel,
   topAncestor,
   type BucketTx,
+  isRecurringDue,
 } from "./stats";
 
 const tx = (over: Partial<BucketTx> & { date: string }): BucketTx => ({
@@ -256,6 +257,30 @@ describe("countsTowardBudget", () => {
   it("uncategorized spend counts only toward total budgets", () => {
     expect(countsTowardBudget(undefined, null, byId)).toBe(true);
     expect(countsTowardBudget(undefined, "c10", byId)).toBe(false);
+  });
+});
+
+describe("isRecurringDue", () => {
+  const now = new Date("2026-09-15T12:00:00");
+
+  it("is due when the date has passed", () => {
+    expect(isRecurringDue({ nextDate: "2026-09-01" }, now)).toBe(true);
+    expect(isRecurringDue({ nextDate: now.toISOString() }, now)).toBe(true);
+  });
+
+  it("is not due while the date is still ahead", () => {
+    expect(isRecurringDue({ nextDate: "2026-10-01" }, now)).toBe(false);
+  });
+
+  it("is not due once deactivated", () => {
+    expect(isRecurringDue({ nextDate: "2026-09-01", active: false }, now)).toBe(false);
+  });
+
+  it("is the same check the auto-log sweep re-runs inside its lock", () => {
+    // Two tabs read the same snapshot; the second must see that the first
+    // already advanced the date and skip it.
+    const advanced = { nextDate: "2026-10-15" };
+    expect(isRecurringDue(advanced, now)).toBe(false);
   });
 });
 
