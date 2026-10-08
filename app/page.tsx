@@ -196,14 +196,15 @@ export default function App() {
           await db.transaction("rw", [db.transactions, db.recurring], async () => {
             const amt = roundCents(r.amount);
             const cashbackEarned = computeCashback(r.type, amt, w);
+            const txId = newId();
             await db.transactions.add({
-              id: newId(),
+              id: txId,
               type: r.type, amount: amt, currency: w.currency, walletId: w.id!,
               categoryId: r.categoryId, note: r.label, date: nowIso,
               cashbackEarned,
               createdAt: nowIso,
             });
-            const credit = cashbackCreditTransaction(cashbackEarned, w, nowIso);
+            const credit = cashbackCreditTransaction(cashbackEarned, w, nowIso, txId);
             if (credit) await db.transactions.add({ ...credit, id: newId(), createdAt: nowIso });
             const { nextDate, ended } = advanceRecurringPastNow(new Date(r.nextDate), r.frequency, r.anchorDay, now, r.endDate);
             await db.recurring.update(id, ended ? { nextDate: nextDate.toISOString(), active: false } : { nextDate: nextDate.toISOString() });

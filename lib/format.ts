@@ -1,5 +1,5 @@
 import { db, type Budget, type Category, type Currency, type Debt, type Recurring, type Transaction, type Wallet } from "./db";
-import { matchWallet, matchCategory } from "./shortcut";
+import { matchWallet, matchCategory, normText } from "./shortcut";
 import { auditBooks } from "./audit";
 import { APP_ID } from "./keys";
 import { remapIds } from "./sync/ids";
@@ -52,6 +52,22 @@ export function roundCents(n: number): number {
  * "1.2.3" still parses as NaN and is rejected downstream by the
  * finite-amount checks (fail closed, never mis-posted).
  */
+/** Ceilings for the two rate fields. A stray zero turns a typo into money. */
+export const MAX_CASHBACK_PCT = 100;
+export const MAX_ROI_PCT = 1000;
+
+/**
+ * Parse a percentage the user typed. `undefined` when it is empty, zero,
+ * negative or unparseable; `tooHigh` flags a value above the ceiling so the
+ * caller can say why instead of silently dropping it.
+ */
+export function parsePercentInput(raw: string, max: number): { pct?: number; tooHigh: boolean } {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return { tooHigh: false };
+  if (n > max) return { tooHigh: true };
+  return { pct: n, tooHigh: false };
+}
+
 export function sanitizeAmountInput(v: string, opts?: { allowNegative?: boolean }): string {
   const stripped = v.replace(/,/g, ".").replace(/[^0-9.\-]/g, "");
   return opts?.allowNegative ? stripped : stripped.replace(/-/g, "");
@@ -170,6 +186,9 @@ export interface ParsedBackup {
 
 const BACKUP_TABLES = ["wallets", "categories", "transactions", "budgets", "debts", "recurring"] as const;
 
+/** Every table except categories carries a currency. */
+const CURRENCY_TABLES = ["wallets", "transactions", "budgets", "debts", "recurring"] as const;
+
 /**
  * Parse + validate backup text without touching the database.
  * Throws an Error with a user-facing (English) message on any problem.
@@ -212,13 +231,18 @@ export function parseBackup(text: string): ParsedBackup {
     }
   }
 
-  // Wallet currencies must look like ISO 4217 codes (case-variant or
-  // malformed codes would split net worth into phantom buckets).
-  const wallets = obj.wallets as Wallet[];
-  for (let i = 0; i < wallets.length; i++) {
-    const c: unknown = wallets[i].currency;
-    if (typeof c === "string" && !/^[A-Z]{3}$/.test(c)) {
-      throw new Error(`The backup is damaged: wallet ${i + 1} has an invalid currency.`);
+  // Every row that carries a currency must carry a well-formed ISO 4217 code.
+  // Requiring a string, not merely rejecting a bad one: a missing or numeric
+  // currency used to slip through and install a wallet whose currency was
+  // `undefined`, which split net worth into a phantom bucket and rendered as
+  // MXN by accident of fmtMoney's default.
+  for (const key of CURRENCY_TABLES) {
+    const rows = obj[key] as Array<Record<string, unknown>>;
+    for (let i = 0; i < rows.length; i++) {
+      const c = rows[i].currency;
+      if (typeof c !== "string" || !/^[A-Z]{3}$/.test(c)) {
+        throw new Error(`The backup is damaged: ${key} entry ${i + 1} has an invalid currency.`);
+      }
     }
   }
 
@@ -236,7 +260,7 @@ export function parseBackup(text: string): ParsedBackup {
   }
 
   return {
-    wallets: deduped(wallets),
+    wallets: deduped(obj.wallets as Wallet[]),
     categories: deduped(obj.categories as Category[]),
     transactions: deduped(txs),
     budgets: deduped(obj.budgets as Budget[]),
@@ -342,6 +366,23 @@ export function transactionsToCSV(rows: CSVRow[]): string {
  * Returns both successfully parsed transactions AND human-readable error messages
  * for invalid rows (wallet/category not found, bad amount/date, currency mismatch).
  */
+/** Names that fold to the same thing as `name` (accents, case, spacing). */
+function sameName<T extends { name: string }>(name: string, rows: T[]): T[] {
+  const n = normText(name);
+  return rows.filter((r) => normText(r.name) === n);
+}
+
+/**
+ * Resolve a CSV name to exactly one row. Two accounts called "Efectivo" (or
+ * "Súper" and "Super", which normText folds together) would otherwise send
+ * the charge to whichever happened to be first, silently.
+ */
+function resolveUnique<T extends { name: string }>(name: string, rows: T[]): T | "ambiguous" | undefined {
+  const matches = sameName(name, rows);
+  if (matches.length > 1) return "ambiguous";
+  return matches[0];
+}
+
 export function parseTransactionsCSV(
   text: string,
   wallets: Wallet[],
@@ -434,8 +475,14 @@ export function parseTransactionsCSV(
       continue;
     }
 
-    // Resolve wallet by name
-    const wallet = matchWallet(walletStr, wallets);
+    // Resolve wallet by name, refusing an ambiguous one rather than
+    // guessing: a charge in the wrong account is worse than a failed import.
+    const walletMatch = resolveUnique(walletStr, wallets);
+    if (walletMatch === "ambiguous") {
+      errors.push(`Row ${rowNum + 1}: "${walletStr}" matches more than one account — rename one to import this row`);
+      continue;
+    }
+    const wallet = walletMatch ?? matchWallet(walletStr, wallets);
     if (!wallet || wallet.id == null) {
       errors.push(`Row ${rowNum + 1}: wallet "${walletStr}" not found (case-insensitive match)`);
       continue;
@@ -450,7 +497,12 @@ export function parseTransactionsCSV(
     // Resolve category by name (only for expense/income, not transfer)
     let categoryId: string | undefined = undefined;
     if (type !== "transfer" && categoryStr) {
-      const category = matchCategory(categoryStr, categories, type as "expense" | "income");
+      const categoryMatch = resolveUnique(categoryStr, categories);
+      if (categoryMatch === "ambiguous") {
+        errors.push(`Row ${rowNum + 1}: "${categoryStr}" matches more than one category — rename one to import this row`);
+        continue;
+      }
+      const category = categoryMatch ?? matchCategory(categoryStr, categories, type as "expense" | "income");
       if (!category || category.id == null) {
         errors.push(`Row ${rowNum + 1}: category "${categoryStr}" not found for type "${type}"`);
         continue;
@@ -465,7 +517,12 @@ export function parseTransactionsCSV(
         errors.push(`Row ${rowNum + 1}: transfer requires a destination wallet (to_wallet column)`);
         continue;
       }
-      const toWallet = matchWallet(toWalletStr, wallets);
+      const toMatch = resolveUnique(toWalletStr, wallets);
+      if (toMatch === "ambiguous") {
+        errors.push(`Row ${rowNum + 1}: "${toWalletStr}" matches more than one account — rename one to import this row`);
+        continue;
+      }
+      const toWallet = toMatch ?? matchWallet(toWalletStr, wallets);
       if (!toWallet || toWallet.id == null) {
         errors.push(`Row ${rowNum + 1}: destination wallet "${toWalletStr}" not found`);
         continue;

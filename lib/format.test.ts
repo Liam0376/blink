@@ -569,7 +569,7 @@ describe("parseBackup / importJSON", () => {
     (obj.wallets as Record<string, unknown>[])[0].name = evil;
     (obj.categories as Record<string, unknown>[])[0].name = evil;
     (obj.transactions as Record<string, unknown>[])[0].note = evil;
-    (obj.wallets as Record<string, unknown>[]).push(JSON.parse('{"__proto__":{"polluted":true},"name":"p"}'));
+    (obj.wallets as Record<string, unknown>[]).push(JSON.parse('{"__proto__":{"polluted":true},"name":"p","currency":"CRC"}'));
     await importJSON(JSON.stringify(obj));
     // Passed through verbatim as inert strings — rendering is JSX text (auto-escaped).
     expect(mocks.wallets.bulkPut).toHaveBeenCalledWith(

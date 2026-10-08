@@ -1247,14 +1247,15 @@ export function RecurringManager({ items, wallets, categories }: { items: Recurr
         const amt = roundCents(r.amount);
         const nowIso = now.toISOString();
         const cashbackEarned = computeCashback(r.type, amt, w);
+        const txId = newId();
         await db.transactions.add({
-          id: newId(),
+          id: txId,
           type: r.type, amount: amt, currency: w.currency, walletId: w.id!,
           categoryId: r.categoryId, note: r.label, date: nowIso,
           cashbackEarned,
           createdAt: nowIso,
         });
-        const credit = cashbackCreditTransaction(cashbackEarned, w, nowIso);
+        const credit = cashbackCreditTransaction(cashbackEarned, w, nowIso, txId);
         if (credit) await db.transactions.add({ ...credit, id: newId(), createdAt: nowIso });
         // Catch up missed periods so nextDate never stays in the past. Con
         // fecha de fin: si el próximo vencimiento ya la supera, el recurrente

@@ -375,6 +375,34 @@ describe("computeGrownBalances", () => {
     expect(grown.get("w1")!).toBeCloseTo(1000 * Math.pow(1.13, 30 / 365) + 10000, 2);
   });
 
+  it("leaves money dated in the future out until the date arrives", () => {
+    const txs = [
+      { type: "income" as const, amount: 1000, currency: "CRC", walletId: "w1", date: "2027-01-01" },
+    ];
+    const wallets = [w("w1", 100)];
+    // Not here yet.
+    expect(computeBalances(wallets, txs, new Date("2026-09-01")).get("w1")).toBe(100);
+    // Arrived.
+    expect(computeBalances(wallets, txs, new Date("2027-01-02")).get("w1")).toBe(1100);
+  });
+
+  it("agrees with the ledger when a transaction is dated in the future", () => {
+    // Both numbers exclude it, so neither shows money that is not there.
+    const balances = computeBalances(
+      [w("w1", 100)],
+      [{ type: "income" as const, amount: 1000, currency: "CRC", walletId: "w1", date: "2027-01-01" }],
+      new Date("2026-09-01")
+    );
+    expect(balances.get("w1")).toBe(100);
+    const grown = computeGrownBalances(
+      [{ id: "w1", roiAnnualPct: 13, createdAt: "2026-01-01" }],
+      balances,
+      [{ type: "income" as const, amount: 1000, walletId: "w1", date: "2027-01-01" }],
+      new Date("2026-09-01")
+    );
+    expect(grown.get("w1")!).toBeCloseTo(100 * Math.pow(1.13, 243 / 365), 2);
+  });
+
   it("accrues across a mid-window withdrawal instead of restarting", () => {
     const balances = new Map([["w1", 1000]]);
     const grown = computeGrownBalances(
@@ -537,6 +565,11 @@ describe("cashbackCreditTransaction", () => {
       note: "Cashback",
       date: "2026-09-14T12:00:00.000Z",
     });
+  });
+
+  it("carries the id of the expense it credits, so a later edit can find it", () => {
+    const credit = cashbackCreditTransaction(10, card, "2026-09-14T12:00:00.000Z", "exp-1");
+    expect(credit?.sourceTxId).toBe("exp-1");
   });
 
   it("never carries its own cashbackEarned, so totalCashbackByWallet can't double-count it", () => {

@@ -97,6 +97,10 @@ export interface Transaction {
    * without cashback, and rows imported via CSV (historical rate unknown).
    * Never recomputed later — a rate change only affects future purchases. */
   cashbackEarned?: number;
+  /** Set on the income row that credits cashback, pointing at the expense it
+   *  came from. Without it, editing one purchase deletes every same-amount
+   *  cashback credit on the wallet. */
+  sourceTxId?: string;
   createdAt: string;
 }
 

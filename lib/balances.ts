@@ -15,12 +15,20 @@ export function computeBalances(
   wallets: Pick<Wallet, "id" | "openingBalance">[],
   // `currency` is accepted (real Transaction rows carry it) but ignored:
   // balances are per-wallet and transfers move the raw amount (no FX).
-  transactions: Pick<Transaction, "type" | "amount" | "currency" | "walletId" | "toWalletId">[]
+  transactions: (Pick<Transaction, "type" | "amount" | "currency" | "walletId" | "toWalletId"> & {
+    date?: string;
+  })[],
+  now: Date = new Date()
 ): Map<string, number> {
   const m = new Map<string, number>();
   for (const w of wallets) m.set(w.id!, w.openingBalance ?? 0);
+  const nowMs = now.getTime();
   for (const t of transactions) {
     if (!Number.isFinite(t.amount) || t.amount === 0) continue;
+    // Money dated in the future has not arrived. Counting it would put it in
+    // "Available to spend" today. A row with no usable date counts, as before.
+    const at = t.date ? new Date(t.date).getTime() : NaN;
+    if (Number.isFinite(at) && at > nowMs) continue;
     if (t.type === "expense") m.set(t.walletId, roundCents((m.get(t.walletId) ?? 0) - t.amount));
     else if (t.type === "income") m.set(t.walletId, roundCents((m.get(t.walletId) ?? 0) + t.amount));
     else {
@@ -137,7 +145,7 @@ export function computeGrownBalances(
       }
       if (delta === 0) continue;
       const day = localDayStart(new Date(t.date));
-      if (Number.isNaN(day)) continue;
+      if (Number.isNaN(day) || day > today) continue;
       byDay.set(day, (byDay.get(day) ?? 0) + delta);
     }
 
@@ -152,7 +160,8 @@ export function computeGrownBalances(
       if (balance > 0) balance *= dailyFactor;
       cursor.setDate(cursor.getDate() + 1);
     }
-    // Today's movements are real but have not earned a day yet.
+    // Today's movements are real but have not earned a day yet. Later-dated
+    // rows were dropped above, matching computeBalances.
     balance += byDay.get(today) ?? 0;
 
     grown.set(w.id, roundCents(balance));
@@ -222,8 +231,9 @@ export function cashbackEarnedForWallet(
 export function cashbackCreditTransaction(
   cashbackEarned: number | undefined,
   wallet: Pick<Wallet, "id" | "currency">,
-  dateIso: string
-): Pick<Transaction, "type" | "amount" | "currency" | "walletId" | "note" | "date"> | undefined {
+  dateIso: string,
+  sourceTxId?: string
+): Pick<Transaction, "type" | "amount" | "currency" | "walletId" | "note" | "date" | "sourceTxId"> | undefined {
   if (!cashbackEarned || cashbackEarned <= 0 || wallet.id == null) return undefined;
   return {
     type: "income",
@@ -232,6 +242,7 @@ export function cashbackCreditTransaction(
     walletId: wallet.id,
     note: "Cashback",
     date: dateIso,
+    sourceTxId,
   };
 }
 
