@@ -375,7 +375,7 @@ describe("sanitizeAmountInput", () => {
 
 describe("transactionsToCSV", () => {
   it("returns only the header when there are no rows", () => {
-    expect(transactionsToCSV([])).toBe("date,type,amount,currency,wallet,to_wallet,category,note");
+    expect(transactionsToCSV([])).toBe("date,type,amount,currency,wallet,to_wallet,category,note,cashback_earned");
   });
 
   it("quotes every field of a basic row", () => {
@@ -392,14 +392,14 @@ describe("transactionsToCSV", () => {
     ]);
     const lines = csv.split("\n");
     expect(lines).toHaveLength(2);
-    expect(lines[1]).toBe('"2026-09-01","expense","1500","CRC","Efectivo","","Comida","almuerzo"');
+    expect(lines[1]).toBe('"2026-09-01","expense","1500","CRC","Efectivo","","Comida","almuerzo",""');
   });
 
   it("includes the transfer destination column", () => {
     const csv = transactionsToCSV([
       { date: "2026-09-01", type: "transfer", amount: 5000, currency: "CRC", wallet: "Efectivo", toWallet: "Tarjeta", category: "" },
     ]);
-    expect(csv.split("\n")[1]).toBe('"2026-09-01","transfer","5000","CRC","Efectivo","Tarjeta","",""');
+    expect(csv.split("\n")[1]).toBe('"2026-09-01","transfer","5000","CRC","Efectivo","Tarjeta","","",""');
   });
 
   it("keeps commas inside a quoted field (no column split)", () => {
@@ -735,6 +735,41 @@ describe("parseTransactionsCSV", () => {
       toWalletId: "w2",
       categoryId: undefined,
     });
+  });
+
+  it("round-trips the frozen cashback amount instead of dropping it", () => {
+    // The card's running cashback total is the sum of these values, so losing
+    // them on a round-trip quietly shrinks it.
+    const original = [
+      { date: "2026-09-01", type: "expense" as const, amount: 1000, currency: "USD", wallet: "Visa", toWallet: "", category: "Food", note: "Lunch", cashbackEarned: 15 },
+      { date: "2026-09-02", type: "expense" as const, amount: 200, currency: "USD", wallet: "Visa", toWallet: "", category: "Food", note: "", cashbackEarned: 3 },
+    ];
+    const { transactions, errors } = parseTransactionsCSV(transactionsToCSV(original), mockWallets, mockCategories);
+    expect(errors).toHaveLength(0);
+    expect(transactions.map((t) => t.cashbackEarned)).toEqual([15, 3]);
+  });
+
+  it("imports an export taken before the cashback column existed", () => {
+    // The 8-column form has to keep working: it is what every export written
+    // before this column looks like.
+    const csv = 'date,type,amount,currency,wallet,to_wallet,category,note\n"2026-09-01","expense","100","USD","Cash","","Food","x"';
+    const { transactions, errors } = parseTransactionsCSV(csv, mockWallets, mockCategories);
+    expect(errors).toHaveLength(0);
+    expect(transactions[0].cashbackEarned).toBeUndefined();
+  });
+
+  it("leaves an empty cashback cell undefined rather than recomputing it", () => {
+    const csv = 'date,type,amount,currency,wallet,to_wallet,category,note,cashback_earned\n"2026-09-01","expense","100","USD","Cash","","Food","x",""';
+    const { transactions, errors } = parseTransactionsCSV(csv, mockWallets, mockCategories);
+    expect(errors).toHaveLength(0);
+    expect(transactions[0].cashbackEarned).toBeUndefined();
+  });
+
+  it("rejects a nonsense cashback value", () => {
+    const csv = 'date,type,amount,currency,wallet,to_wallet,category,note,cashback_earned\n"2026-09-01","expense","100","USD","Cash","","Food","x","abc"';
+    const { transactions, errors } = parseTransactionsCSV(csv, mockWallets, mockCategories);
+    expect(transactions).toHaveLength(0);
+    expect(errors[0]).toMatch(/cashback_earned must be a positive number/);
   });
 
   it("returns empty transactions and an error when CSV is empty", () => {

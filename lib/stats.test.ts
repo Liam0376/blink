@@ -10,6 +10,7 @@ import {
   spendByTopLevel,
   topAncestor,
   type BucketTx,
+  isDuplicateEntry,
   isRecurringDue,
 } from "./stats";
 
@@ -257,6 +258,43 @@ describe("countsTowardBudget", () => {
   it("uncategorized spend counts only toward total budgets", () => {
     expect(countsTowardBudget(undefined, null, byId)).toBe(true);
     expect(countsTowardBudget(undefined, "c10", byId)).toBe(false);
+  });
+});
+
+describe("isDuplicateEntry", () => {
+  const now = new Date("2026-09-15T12:00:00.000Z");
+  const candidate = {
+    type: "expense", amount: 50, walletId: "w1", categoryId: "c1",
+    date: "2026-09-15T12:00:00.000Z", note: "Coffee",
+  };
+  const savedAt = (iso: string, over: Partial<typeof candidate> = {}) => ({
+    ...candidate, ...over, createdAt: iso,
+  });
+
+  it("catches the same entry saved seconds ago", () => {
+    expect(isDuplicateEntry(savedAt("2026-09-15T11:59:58.000Z"), candidate, now)).toBe(true);
+  });
+
+  it("lets the same entry through once the window has passed", () => {
+    // A second identical coffee minutes later is a real second coffee.
+    expect(isDuplicateEntry(savedAt("2026-09-15T11:59:00.000Z"), candidate, now)).toBe(false);
+  });
+
+  it("is blind to a difference in any field", () => {
+    expect(isDuplicateEntry(savedAt("2026-09-15T11:59:58.000Z", { amount: 51 }), candidate, now)).toBe(false);
+    expect(isDuplicateEntry(savedAt("2026-09-15T11:59:58.000Z", { note: "Tea" }), candidate, now)).toBe(false);
+    expect(isDuplicateEntry(savedAt("2026-09-15T11:59:58.000Z", { categoryId: "c2" }), candidate, now)).toBe(false);
+    expect(isDuplicateEntry(savedAt("2026-09-15T11:59:58.000Z", { date: "2026-09-14T12:00:00.000Z" }), candidate, now)).toBe(false);
+  });
+
+  it("treats a missing note and an empty note as the same", () => {
+    const { note: _drop, ...noNote } = candidate;
+    expect(isDuplicateEntry({ ...noNote, createdAt: "2026-09-15T11:59:58.000Z" }, noNote, now)).toBe(true);
+    expect(isDuplicateEntry({ ...noNote, createdAt: "2026-09-15T11:59:58.000Z", note: "" }, noNote, now)).toBe(true);
+  });
+
+  it("ignores a row with an unparseable timestamp", () => {
+    expect(isDuplicateEntry(savedAt("not a date"), candidate, now)).toBe(false);
   });
 });
 

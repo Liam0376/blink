@@ -263,6 +263,51 @@ export function advanceRecurring(
  * should deactivate it). Pure — callers (manual "log now" and the
  * auto-log-on-open effect) do the actual transaction/DB writes.
  */
+/** A same-content save inside this window is treated as one tap landing twice. */
+export const DUPLICATE_SAVE_WINDOW_MS = 5_000;
+
+export interface EntryFields {
+  type: string;
+  amount: number;
+  walletId: string;
+  toWalletId?: string;
+  categoryId?: string;
+  date: string;
+  note?: string;
+}
+
+/**
+ * Whether `existing` is the same entry as `candidate`, saved moments ago.
+ *
+ * Two tabs can both submit the sheet they each had open, and the per-component
+ * `savingRef` cannot see the other tab. IndexedDB serialises readwrite
+ * transactions on the same store across connections, so checking this inside
+ * the save transaction is what turns it into a guard instead of a race.
+ *
+ * The window is deliberately short and every field has to match, so a second
+ * identical charge the user meant to record just moments later still lands.
+ */
+export function isDuplicateEntry(
+  existing: EntryFields & { createdAt: string },
+  candidate: EntryFields,
+  now: Date,
+  windowMs: number = DUPLICATE_SAVE_WINDOW_MS
+): boolean {
+  const created = Date.parse(existing.createdAt);
+  if (!Number.isFinite(created)) return false;
+  const age = now.getTime() - created;
+  if (age < 0 || age > windowMs) return false;
+  return (
+    existing.type === candidate.type &&
+    existing.amount === candidate.amount &&
+    existing.walletId === candidate.walletId &&
+    existing.toWalletId === candidate.toWalletId &&
+    existing.categoryId === candidate.categoryId &&
+    existing.date === candidate.date &&
+    (existing.note ?? "") === (candidate.note ?? "")
+  );
+}
+
 /** A recurring item is due when it is still active and its date has passed. */
 export function isRecurringDue(
   item: { active?: boolean; nextDate: string },

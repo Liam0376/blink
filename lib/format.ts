@@ -336,6 +336,8 @@ export interface CSVRow {
   toWallet?: string;
   category: string;
   note?: string;
+  /** The frozen amount this row earned, not the rate. Absent on most rows. */
+  cashbackEarned?: number;
 }
 
 /** Neutralize spreadsheet formula injection (=, +, -, @ at cell start). */
@@ -346,9 +348,9 @@ function csvCell(v: string | number): string {
 }
 
 export function transactionsToCSV(rows: CSVRow[]): string {
-  const head = "date,type,amount,currency,wallet,to_wallet,category,note";
+  const head = "date,type,amount,currency,wallet,to_wallet,category,note,cashback_earned";
   const lines = rows.map((r) =>
-    [r.date, r.type, r.amount, r.currency, r.wallet, r.toWallet ?? "", r.category, r.note ?? ""].map(csvCell).join(",")
+    [r.date, r.type, r.amount, r.currency, r.wallet, r.toWallet ?? "", r.category, r.note ?? "", r.cashbackEarned ?? ""].map(csvCell).join(",")
   );
   return [head, ...lines].join("\n");
 }
@@ -358,8 +360,10 @@ export function transactionsToCSV(rows: CSVRow[]): string {
  * Round-trip: transactionsToCSV output → parseTransactionsCSV → new transactions.
  *
  * NOTE: This importer expects the EXACT format produced by transactionsToCSV:
- * 8 columns (date,type,amount,currency,wallet,to_wallet,category,note),
- * quoted fields with "" escaping. This is NOT a generic bank-statement importer —
+ * 8 columns (date,type,amount,currency,wallet,to_wallet,category,note) or the
+ * same with a trailing cashback_earned, quoted fields with "" escaping. The
+ * 8-column form is still accepted so exports taken before that column existed
+ * keep importing. This is NOT a generic bank-statement importer —
  * each wallet/category name must already exist in the app. If you need to import
  * from another format or app, restore the full backup JSON instead.
  *
@@ -422,16 +426,21 @@ export function parseTransactionsCSV(
 
   // Header validation: expect exactly these columns in order
   const expectedHeader = ["date", "type", "amount", "currency", "wallet", "to_wallet", "category", "note"];
+  const cashbackHeader = "cashback_earned";
   if (lines.length === 0) {
     errors.push("CSV is empty");
     return { transactions, errors };
   }
 
   const headerFields = parseCSVLine(lines[0]);
-  if (headerFields.length !== 8 || !headerFields.every((f, i) => f === expectedHeader[i])) {
-    errors.push(`Header mismatch: expected "${expectedHeader.join(",")}" but got "${headerFields.join(",")}"`);
+  const headerOk =
+    (headerFields.length === 8 && headerFields.every((f, i) => f === expectedHeader[i])) ||
+    (headerFields.length === 9 && expectedHeader.every((f, i) => headerFields[i] === f) && headerFields[8] === cashbackHeader);
+  if (!headerOk) {
+    errors.push(`Header mismatch: expected "${expectedHeader.join(",")}" (optionally with ",${cashbackHeader}") but got "${headerFields.join(",")}"`);
     return { transactions, errors };
   }
+  const hasCashbackCol = headerFields.length === 9;
 
   // Require at least one data row (header alone is not valid)
   if (lines.length < 2) {
@@ -445,12 +454,12 @@ export function parseTransactionsCSV(
     if (!line) continue; // Skip empty lines
 
     const fields = parseCSVLine(line);
-    if (fields.length !== 8) {
-      errors.push(`Row ${rowNum + 1}: expected 8 columns, got ${fields.length}`);
+    if (fields.length !== headerFields.length) {
+      errors.push(`Row ${rowNum + 1}: expected ${headerFields.length} columns, got ${fields.length}`);
       continue;
     }
 
-    const [dateStr, typeStr, amountStr, currencyStr, walletStr, toWalletStr, categoryStr, noteStr] = fields;
+    const [dateStr, typeStr, amountStr, currencyStr, walletStr, toWalletStr, categoryStr, noteStr, cashbackStr] = fields;
 
     // Validate type
     const type = typeStr.toLowerCase();
@@ -544,6 +553,19 @@ export function parseTransactionsCSV(
       }
     }
 
+    // Cashback is a frozen amount, not a rate. An empty cell means the row
+    // earned none (or the export predates the column), and stays undefined
+    // rather than being recomputed from the card's current rate.
+    let cashbackEarned: number | undefined;
+    if (hasCashbackCol && cashbackStr) {
+      const cb = Number(cashbackStr);
+      if (!Number.isFinite(cb) || cb <= 0) {
+        errors.push(`Row ${rowNum + 1}: cashback_earned must be a positive number, got "${cashbackStr}"`);
+        continue;
+      }
+      cashbackEarned = roundCents(cb);
+    }
+
     // Build transaction (round to cents at intake: the balance math's
     // per-operation rounding would otherwise absorb sub-cent amounts).
     const now = new Date().toISOString();
@@ -556,6 +578,7 @@ export function parseTransactionsCSV(
       categoryId,
       note: noteStr || undefined,
       date: dateObj.toISOString(),
+      cashbackEarned,
       createdAt: now,
     });
   }

@@ -6,6 +6,7 @@ import { db, type Category, type Currency, type TxType, type Wallet } from "@/li
 import { cashbackCreditTransaction, computeCashback } from "@/lib/balances";
 import { CUR_SYM, fmtMoney, roundCents, sanitizeAmountInput, toInputDate } from "@/lib/format";
 import { browserKV } from "@/lib/shortcut";
+import { isDuplicateEntry } from "@/lib/stats";
 import { newId } from "@/lib/sync/ids";
 
 // Custom (user-added) currencies reuse the generic USD-scale chips.
@@ -216,10 +217,24 @@ export default function QuickAdd({
           const credit = cashbackCreditTransaction(cashbackEarned, w, d.toISOString(), editingTx.id);
           if (credit) await db.transactions.add({ ...credit, id: newId(), createdAt: nowIso });
         } else {
-          const txId = newId();
-          await db.transactions.add({ ...fields, id: txId, createdAt: nowIso });
-          const credit = cashbackCreditTransaction(cashbackEarned, w, d.toISOString(), txId);
-          if (credit) await db.transactions.add({ ...credit, id: newId(), createdAt: nowIso });
+          // Another tab may have just saved this same entry. The check has to
+          // run inside the transaction, which IndexedDB serialises across
+          // tabs, or both read "nothing there" and both insert.
+          const entry = {
+            type, amount: roundedAmount, walletId: walletId!,
+            toWalletId: fields.toWalletId, categoryId: fields.categoryId,
+            date: fields.date, note: fields.note,
+          };
+          const already = await db.transactions
+            .where("walletId").equals(walletId!)
+            .filter((t) => isDuplicateEntry(t, entry, new Date()))
+            .first();
+          if (!already) {
+            const txId = newId();
+            await db.transactions.add({ ...fields, id: txId, createdAt: nowIso });
+            const credit = cashbackCreditTransaction(cashbackEarned, w, d.toISOString(), txId);
+            if (credit) await db.transactions.add({ ...credit, id: newId(), createdAt: nowIso });
+          }
         }
       });
       try {

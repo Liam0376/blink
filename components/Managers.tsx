@@ -1599,6 +1599,7 @@ export function SettingsPanel({
         date: t.date, type: t.type, amount: t.amount, currency: t.currency,
         wallet: wById.get(t.walletId)?.name ?? "", toWallet: t.toWalletId != null ? (wById.get(t.toWalletId)?.name ?? "") : "",
         category: t.categoryId != null ? (cById.get(t.categoryId)?.name ?? "") : "", note: t.note ?? "",
+        cashbackEarned: t.cashbackEarned,
       }));
       download(new Blob([transactionsToCSV(rows)], { type: "text/csv" }), `blink-${new Date().toISOString().slice(0, 10)}.csv`);
     } catch {
