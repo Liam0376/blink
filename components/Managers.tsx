@@ -1,8 +1,8 @@
 "use client";
 
 import { memo, useEffect, useState, type ChangeEvent, type ReactNode } from "react";
-import { Plus, Trash2, Archive, Pencil, ChevronDown, RefreshCw } from "lucide-react";
-import { db, type Budget, type Category, type Currency, type Debt, type Recurring, type Transaction, type Wallet } from "@/lib/db";
+import { Plus, Trash2, Archive, Pencil, ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
+import { db, moveWalletOrder, type Budget, type Category, type Currency, type Debt, type Recurring, type Transaction, type Wallet } from "@/lib/db";
 import { CURRENCIES, currencyOptionsFor, daysSince, exportJSON, fmtMoney, importJSON, parseBackup, parseTransactionsCSV, prettyDay, roundCents, sanitizeAmountInput, transactionsToCSV } from "@/lib/format";
 import { auditBooks, type AuditIssue } from "@/lib/audit";
 import { cashbackCreditTransaction, computeBalances, computeCashback } from "@/lib/balances";
@@ -135,6 +135,7 @@ export const TransactionList = memo(function TransactionList({
 });
 
 export function WalletManager({ wallets, balances }: { wallets: Wallet[]; balances?: Map<string, number> }) {
+  const [reordering, setReordering] = useState(false);
   const [name, setName] = useState("");
   const [kind, setKind] = useState<Wallet["kind"]>("cash");
   const [last4, setLast4] = useState("");
@@ -319,16 +320,51 @@ export function WalletManager({ wallets, balances }: { wallets: Wallet[]; balanc
     }
   }
 
+  /** Move one card or account a single slot. moveWalletOrder decides what to
+   * write; the writes go through Dexie as usual. */
+  async function moveOrder(w: Wallet, direction: -1 | 1) {
+    if (w.id == null) return;
+    const writes = moveWalletOrder(wallets, w.id, direction);
+    if (writes.length === 0) return;
+    try {
+      await db.transaction("rw", [db.wallets], async () => {
+        for (const row of writes) await db.wallets.update(row.id, { sortOrder: row.sortOrder });
+      });
+    } catch {
+      setError("Couldn't save the new order.");
+    }
+  }
+
   return (
     <div className="space-y-3">
+      {wallets.length > 1 && (
+        <button
+          onClick={() => setReordering((v) => !v)}
+          aria-pressed={reordering}
+          className="w-full py-2 rounded-xl border border-zinc-300 dark:border-zinc-700 text-xs font-bold min-h-[44px]"
+        >
+          {reordering ? "Done reordering" : "Reorder cards and accounts"}
+        </button>
+      )}
       <ul className="space-y-2">
-        {wallets.map((w) => (
+        {wallets.map((w, i) => (
           <li key={w.id} className="flex items-center gap-3 p-3 rounded-2xl border border-zinc-200/70 dark:border-zinc-800/70 shadow-sm shadow-zinc-900/[0.03] dark:shadow-none">
             <span className="w-3 h-10 rounded-full" style={{ background: w.color }} aria-hidden />
             <div className="flex-1 min-w-0">
               <p className="font-bold text-sm">{w.name} {w.archived ? "(archived)" : ""}</p>
               <p className="text-[11px] text-zinc-500 capitalize">{w.kind}{w.last4 ? ` •${w.last4}` : ""} · {w.currency}{(() => { const bal = balances?.get(w.id!) ?? w.openingBalance ?? 0; return bal !== 0 ? (w.kind === "card" && bal < 0 ? ` · owes ${fmtMoney(Math.abs(bal), w.currency)}` : ` · ${fmtMoney(bal, w.currency)}`) : ""; })()}{w.roiAnnualPct ? ` · ${w.roiAnnualPct}%/yr` : ""}{w.dueDay ? ` · due day ${w.dueDay}` : ""}{w.corteDay ? ` · cuts day ${w.corteDay}` : ""}{w.cashbackPct ? ` · ${w.cashbackPct}% cashback` : ""}</p>
             </div>
+            {reordering ? (
+              <>
+                <button className="p-2.5 text-zinc-500 dark:text-zinc-400 min-w-[44px] min-h-[44px] flex items-center justify-center disabled:opacity-30" aria-label={`Move ${w.name} up`} disabled={i === 0} onClick={() => { void moveOrder(w, -1); }}>
+                  <ChevronUp size={15} />
+                </button>
+                <button className="p-2.5 text-zinc-500 dark:text-zinc-400 min-w-[44px] min-h-[44px] flex items-center justify-center disabled:opacity-30" aria-label={`Move ${w.name} down`} disabled={i === wallets.length - 1} onClick={() => { void moveOrder(w, 1); }}>
+                  <ChevronDown size={15} />
+                </button>
+              </>
+            ) : (
+            <>
             <button className="p-2.5 text-zinc-500 dark:text-zinc-400 min-w-[44px] min-h-[44px] flex items-center justify-center" aria-label={`Edit ${w.name}`} onClick={() => { setEditing(w); setName(w.name); setKind(w.kind); setLast4(w.last4 ?? ""); setCurrencySel(w.currency); setCustomCurrency(""); setOpening(String(w.kind === "card" ? Math.abs(w.openingBalance ?? 0) : (w.openingBalance ?? 0))); setHasRoi(!!w.roiAnnualPct); setRoiPct(w.roiAnnualPct ? String(w.roiAnnualPct) : ""); setHasDueDay(!!w.dueDay); setDueDay(w.dueDay ? String(w.dueDay) : ""); setHasCorte(!!w.corteDay); setCorteDay(w.corteDay ? String(w.corteDay) : ""); setHasCashback(!!w.cashbackPct); setCashbackPctStr(w.cashbackPct ? String(w.cashbackPct) : ""); setCashbackOpeningStr(w.cashbackOpening ? String(w.cashbackOpening) : ""); setShowForm(true); }}>
               <Pencil size={15} />
             </button>
@@ -338,6 +374,8 @@ export function WalletManager({ wallets, balances }: { wallets: Wallet[]; balanc
             <button className="p-2.5 text-zinc-500 dark:text-zinc-400 min-w-[44px] min-h-[44px] flex items-center justify-center" aria-label={`Delete ${w.name}`} onClick={() => remove(w)}>
               <Trash2 size={15} />
             </button>
+            </>
+            )}
           </li>
         ))}
       </ul>

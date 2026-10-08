@@ -3,7 +3,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Home, ChartPie, Wallet as WalletIcon, PiggyBank, Ellipsis, Plus, Search, Moon, Sun } from "lucide-react";
-import { db, type Currency, type Transaction } from "@/lib/db";
+import { db, type Currency, type Transaction, sortWallets } from "@/lib/db";
 import { seedIfEmpty } from "@/lib/seed";
 import { CUR_SYM, currencyOptionsFor, fmtMoney, prettyDay, roundCents, startOfPeriod } from "@/lib/format";
 import { cashbackCreditTransaction, cashbackEarnedForWallet, computeBalances, computeCashback, computeGrownBalances, creditsSinceCut, lastCutDate, netWorthFromBalances, statementAmount, totalCashbackByWallet } from "@/lib/balances";
@@ -53,7 +53,10 @@ const EMPTY: never[] = [];
 
 export default function App() {
   const [historyLimit, setHistoryLimit] = useState(120);
-  const wallets = useLiveQuery(() => db.wallets.toArray(), []) ?? EMPTY;
+  // Sorted here, once: every wallet list in the app (home rows, the More
+  // manager, the QuickAdd picker, the transfer and budget dropdowns) takes
+  // this array as a prop.
+  const wallets = useLiveQuery(async () => sortWallets(await db.wallets.toArray()), []) ?? EMPTY;
   const categories = useLiveQuery(() => db.categories.toArray(), []) ?? EMPTY;
   const transactions = useLiveQuery(() => db.transactions.orderBy("date").reverse().limit(historyLimit).toArray(), [historyLimit]) ?? EMPTY;
   // Full-dataset query for MONEY MATH ONLY (balances, month sums, budget

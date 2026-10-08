@@ -14,6 +14,12 @@ export interface Wallet {
   color: string;
   currency: Currency;
   archived?: boolean;
+  /** Display position in the wallet lists. Unset means "never moved": those
+   * sort last, in the order IndexedDB returned them, so a new card lands at
+   * the bottom until it is moved. Materialised to 0..n-1 the first time the
+   * list is reordered, so later moves only rewrite the two wallets that
+   * swapped. */
+  sortOrder?: number;
   /** Balance at install / account opening — ledger adds on top. */
   openingBalance?: number;
   openingDate?: string;
@@ -222,3 +228,39 @@ export function makeDb(name: string): FinanceDB {
 }
 
 export const db = makeDb("blink");
+
+/**
+ * Wallet display order: the ones the user has positioned first, by position,
+ * then the ones never moved, in the order they were read. Array#sort is
+ * stable, so unset wallets keep their relative order instead of shuffling on
+ * every render.
+ */
+export function sortWallets(wallets: Wallet[]): Wallet[] {
+  return [...wallets].sort((a, b) => (a.sortOrder ?? Infinity) - (b.sortOrder ?? Infinity));
+}
+
+/**
+ * The rows to write to move one wallet one slot, or an empty array when the
+ * move is impossible (either end of the list).
+ *
+ * A wallet that was never moved has no position, so the first move has to give
+ * one to every wallet or the untouched ones would jump to the end when a
+ * neighbour is picked up. Every move after that writes only the two that
+ * swapped.
+ */
+export function moveWalletOrder(
+  wallets: Wallet[],
+  id: string,
+  direction: -1 | 1
+): Array<{ id: string; sortOrder: number }> {
+  const ordered = sortWallets(wallets);
+  const from = ordered.findIndex((w) => w.id === id);
+  const to = from + direction;
+  if (from < 0 || to < 0 || to >= ordered.length) return [];
+  const target = new Map(ordered.map((w, i) => [w.id, i]));
+  target.set(id, to);
+  target.set(ordered[to].id, from);
+  return ordered
+    .filter((w) => w.id != null && w.sortOrder !== target.get(w.id))
+    .map((w) => ({ id: w.id!, sortOrder: target.get(w.id)! }));
+}
