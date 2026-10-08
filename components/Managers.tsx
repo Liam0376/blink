@@ -59,6 +59,9 @@ export const TransactionList = memo(function TransactionList({
   onEdit?: (tx: { id?: string; type: string; amount: number; currency: Currency; walletId: string; toWalletId?: string; categoryId?: string; note?: string; date: string; image?: string; cashbackEarned?: number; createdAt: string }) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  // One clock read for the whole list. Calling Date.now() per row is impure
+  // during render, and rows disagreeing about "now" would be worse.
+  const [nowMs] = useState(() => Date.now());
   const wById = new Map(wallets.map((w) => [w.id, w]));
   const cById = new Map(categories.map((c) => [c.id, c]));
   if (txs.length === 0)
@@ -82,7 +85,7 @@ export const TransactionList = memo(function TransactionList({
         ].filter(Boolean).join(" · ");
         // Dated ahead of today: it is in the ledger but deliberately kept out
         // of the balance, so say so rather than let it look like a bug.
-        const isFuture = new Date(t.date).getTime() > Date.now();
+        const isFuture = new Date(t.date).getTime() > nowMs;
         return (
           <li key={t.id} className="tx-row" onClick={() => onEdit?.(t)} style={onEdit ? { cursor: "pointer" } : undefined}>
             <span className="w-9 h-9 rounded-xl flex items-center justify-center text-base shrink-0" style={{ background: "var(--surface)" }} aria-hidden>
@@ -644,7 +647,13 @@ export function RoiPrompt({ wallet }: { wallet: Wallet }) {
     setBusy(true);
     setError(null);
     try {
-      await db.wallets.update(wallet.id, { roiAnnualPct: n, roiRateSince: new Date().toISOString(), roiAsked: true });
+      await db.wallets.update(wallet.id, {
+        roiAnnualPct: n,
+        // Re-anchoring without a rate change would forget the interest already
+        // accrued since the old anchor and drop the displayed balance.
+        roiRateSince: n === wallet.roiAnnualPct ? wallet.roiRateSince : new Date().toISOString(),
+        roiAsked: true,
+      });
     } catch {
       setError("Couldn't save. Try again.");
       setBusy(false);
@@ -1213,7 +1222,12 @@ export function RecurringManager({ items, wallets, categories }: { items: Recurr
         ...(hasEnd && endDate ? { endDate } : { endDate: undefined }),
       };
       if (editingId != null) {
-        await db.recurring.update(editingId, data);
+        // Saving is the only way to put an item back on a real date: one whose
+        // stored nextDate is unreadable is never due, so the auto-log skips it
+        // forever and "log now" refuses it.
+        const existing = await db.recurring.get(editingId);
+        const broken = !existing || !Number.isFinite(new Date(existing.nextDate).getTime());
+        await db.recurring.update(editingId, broken ? { ...data, nextDate: new Date().toISOString() } : data);
       } else {
         await db.recurring.add({
           ...data,
@@ -1241,6 +1255,10 @@ export function RecurringManager({ items, wallets, categories }: { items: Recurr
       return;
     }
     if (!Number.isFinite(r.amount) || r.amount <= 0) return;
+    if (!Number.isFinite(new Date(r.nextDate).getTime())) {
+      setError("This item's next date can't be read. Edit it and set a new date.");
+      return;
+    }
     // Dead-on-arrival guard: if the due occurrence is already past the end
     // date, deactivate without posting a phantom transaction.
     if (typeof r.endDate === "string" && r.endDate) {

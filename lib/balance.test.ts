@@ -5,7 +5,6 @@ import {
   computeBalances,
   computeCashback,
   computeGrownBalances,
-  growBalance,
   lastCutDate,
   creditsSinceCut,
   netWorthFromBalances,
@@ -155,6 +154,26 @@ describe("computeBalances (lib/balances.ts — app/page.tsx source of truth)", (
     expect(m.get("w9")).toBe(-50);
   });
 
+  it("ignores a transaction type the app never writes", () => {
+    // Anything with an unknown type used to take the transfer branch and debit
+    // the source, so a damaged row silently moved money.
+    const m = computeBalances([w("w1")], [
+      { type: "income", amount: 1000, currency: "CRC", walletId: "w1" },
+      { type: "bogus" as never, amount: 400, currency: "CRC", walletId: "w1" },
+    ]);
+    expect(m.get("w1")).toBe(1000);
+  });
+
+  it("ignores a negative amount instead of inverting the entry", () => {
+    const m = computeBalances([w("w1")], [
+      { type: "income", amount: 1000, currency: "CRC", walletId: "w1" },
+      { type: "expense", amount: -400, currency: "CRC", walletId: "w1" },
+      { type: "transfer", amount: -100, currency: "CRC", walletId: "w1", toWalletId: "w2" },
+    ]);
+    expect(m.get("w1")).toBe(1000);
+    expect(m.has("w2")).toBe(false);
+  });
+
   it("rounds per operation to avoid floating-point drift", () => {
     const m = computeBalances([w("w1")], [
       { type: "income", amount: 0.1, currency: "USD", walletId: "w1" },
@@ -260,43 +279,6 @@ describe("budget progress math (app/page.tsx replica)", () => {
   });
 });
 
-describe("growBalance (ROI display projection)", () => {
-  it("grows a balance compounding annually over exactly one year", () => {
-    const since = new Date("2025-01-01T00:00:00Z");
-    const now = new Date("2026-01-01T00:00:00Z");
-    expect(growBalance(1000, 13, since, now)).toBeCloseTo(1130, 2);
-  });
-
-  it("returns the balance unchanged when roiAnnualPct is unset, zero, or negative", () => {
-    const since = new Date("2025-01-01T00:00:00Z");
-    const now = new Date("2026-01-01T00:00:00Z");
-    expect(growBalance(1000, undefined, since, now)).toBe(1000);
-    expect(growBalance(1000, 0, since, now)).toBe(1000);
-    expect(growBalance(1000, -5, since, now)).toBe(1000);
-  });
-
-  it("never grows a non-positive balance (no compounding on debt/empty wallets)", () => {
-    const since = new Date("2025-01-01T00:00:00Z");
-    const now = new Date("2026-01-01T00:00:00Z");
-    expect(growBalance(0, 13, since, now)).toBe(0);
-    expect(growBalance(-500, 13, since, now)).toBe(-500);
-  });
-
-  it("returns the balance unchanged when `now` is not after `since`", () => {
-    const t = new Date("2026-01-01T00:00:00Z");
-    expect(growBalance(1000, 13, t, t)).toBe(1000);
-    expect(growBalance(1000, 13, new Date("2026-06-01"), new Date("2026-01-01"))).toBe(1000);
-  });
-
-  it("compounds partial years correctly (~half a year)", () => {
-    const since = new Date("2026-01-01T00:00:00Z");
-    const now = new Date("2026-07-02T00:00:00Z"); // ~182.5 days
-    const grown = growBalance(1000, 13, since, now);
-    // sqrt(1.13) ≈ 1.06301 for half a year
-    expect(grown).toBeCloseTo(1063, 0);
-  });
-});
-
 describe("computeGrownBalances", () => {
   it("leaves wallets without roiAnnualPct untouched", () => {
     const balances = new Map([["w1", 1000]]);
@@ -313,6 +295,38 @@ describe("computeGrownBalances", () => {
       new Date("2026-01-01")
     );
     expect(grown.get("w1")).toBeCloseTo(1130, 2);
+  });
+
+  it("never grows an unset, zero, or negative rate, nor a non-positive balance", () => {
+    const balances = new Map([["w1", 1000], ["w2", 1000], ["w3", 1000], ["w4", 0], ["w5", -500]]);
+    const grown = computeGrownBalances(
+      [
+        { id: "w1", createdAt: "2025-01-01" },
+        { id: "w2", roiAnnualPct: 0, createdAt: "2025-01-01" },
+        { id: "w3", roiAnnualPct: -5, createdAt: "2025-01-01" },
+        { id: "w4", roiAnnualPct: 13, createdAt: "2025-01-01" },
+        { id: "w5", roiAnnualPct: 13, createdAt: "2025-01-01" },
+      ],
+      balances,
+      [],
+      new Date("2026-01-01")
+    );
+    expect(grown.get("w1")).toBe(1000);
+    expect(grown.get("w2")).toBe(1000);
+    expect(grown.get("w3")).toBe(1000);
+    expect(grown.get("w4")).toBe(0);
+    expect(grown.get("w5")).toBe(-500);
+  });
+
+  it("never accrues interest on a card, whose kind the form never offers a rate", () => {
+    const balances = new Map([["w1", 1000]]);
+    const grown = computeGrownBalances(
+      [{ id: "w1", kind: "card" as const, roiAnnualPct: 13, createdAt: "2025-01-01" }],
+      balances,
+      [],
+      new Date("2026-01-01")
+    );
+    expect(grown.get("w1")).toBe(1000);
   });
 
   it("does not mutate the input balances map", () => {

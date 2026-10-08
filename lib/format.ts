@@ -86,8 +86,11 @@ export function fmtMoney(amount: number, currency: Currency = "MXN"): string {
         })
       );
     } catch {
-      // Syntactically valid but non-existent code (e.g. "ZZZ"): Intl throws
-      // RangeError. Degrade to a plain number + code instead of crashing render.
+      // Intl accepts any well-formed three-letter code, so an unknown-but-
+      // valid one ("ZZZ") formats natively and never lands here. This branch is
+      // for a code that is not three letters at all, which only a hand-edited
+      // backup or a foreign CSV can produce. Degrade to a plain number + code
+      // instead of crashing the render.
       return `${new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount)} ${currency}`;
     }
   }
@@ -231,6 +234,32 @@ export function parseBackup(text: string): ParsedBackup {
     }
   }
 
+  // Enums the scheduler and the money math branch on. A frequency the app
+  // never writes falls through to the yearly branch and schedules the wrong
+  // day; a bogus kind costs a wallet its cashback or scopes a category to the
+  // wrong side of the ledger.
+  const recurringRows = obj.recurring as Array<Record<string, unknown>>;
+  for (let i = 0; i < recurringRows.length; i++) {
+    const f = recurringRows[i].frequency;
+    if (f !== "weekly" && f !== "monthly" && f !== "yearly") {
+      throw new Error(`The backup is damaged: recurring entry ${i + 1} has an invalid frequency.`);
+    }
+  }
+  const WALLET_KINDS = ["cash", "card", "bank", "other"];
+  const walletRows = obj.wallets as Array<Record<string, unknown>>;
+  for (let i = 0; i < walletRows.length; i++) {
+    if (!WALLET_KINDS.includes(walletRows[i].kind as string)) {
+      throw new Error(`The backup is damaged: wallet entry ${i + 1} has an invalid kind.`);
+    }
+  }
+  const categoryRows = obj.categories as Array<Record<string, unknown>>;
+  for (let i = 0; i < categoryRows.length; i++) {
+    const k = categoryRows[i].kind;
+    if (k !== "expense" && k !== "income") {
+      throw new Error(`The backup is damaged: category entry ${i + 1} has an invalid kind.`);
+    }
+  }
+
   // Every row that carries a currency must carry a well-formed ISO 4217 code.
   // Requiring a string, not merely rejecting a bad one: a missing or numeric
   // currency used to slip through and install a wallet whose currency was
@@ -340,10 +369,30 @@ export interface CSVRow {
   cashbackEarned?: number;
 }
 
+/**
+ * Whether csvCell would prefix this cell with the neutralising apostrophe.
+ * Leading whitespace counts, because a spreadsheet trims it before deciding
+ * the cell is a formula.
+ */
+function needsEscaping(s: string): boolean {
+  return /^\s*[=+\-@]/.test(s) || s.startsWith("'");
+}
+
+/**
+ * Undo csvCell's formula neutralisation, exactly one prefix. The export adds a
+ * leading apostrophe to any cell that would otherwise be read as a formula, so
+ * without this a note of "=2+2" comes back as "'=2+2" and keeps the apostrophe
+ * through every later round-trip. The leading-apostrophe case is included so a
+ * note that genuinely begins with one survives instead of being eaten.
+ */
+function unescapeInjection(s: string): string {
+  return s.startsWith("'") && needsEscaping(s.slice(1)) ? s.slice(1) : s;
+}
+
 /** Neutralize spreadsheet formula injection (=, +, -, @ at cell start). */
 function csvCell(v: string | number): string {
   let s = String(v);
-  if (/^\s*[=+\-@]/.test(s)) s = "'" + s;
+  if (needsEscaping(s)) s = "'" + s;
   return `"${s.replace(/"/g, '""')}"`;
 }
 
@@ -453,7 +502,7 @@ export function parseTransactionsCSV(
     const line = lines[rowNum].trim();
     if (!line) continue; // Skip empty lines
 
-    const fields = parseCSVLine(line);
+    const fields = parseCSVLine(line).map(unescapeInjection);
     if (fields.length !== headerFields.length) {
       errors.push(`Row ${rowNum + 1}: expected ${headerFields.length} columns, got ${fields.length}`);
       continue;

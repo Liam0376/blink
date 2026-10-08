@@ -24,14 +24,18 @@ export function computeBalances(
   for (const w of wallets) m.set(w.id!, w.openingBalance ?? 0);
   const nowMs = now.getTime();
   for (const t of transactions) {
-    if (!Number.isFinite(t.amount) || t.amount === 0) continue;
+    // Ledger rows carry magnitudes. A negative amount inverts the entry, and a
+    // type this switch doesn't know has no defensible reading at all — the
+    // intake paths all reject both, so a row like that can only come from
+    // hand-edited storage. Ignoring it beats guessing at it.
+    if (!Number.isFinite(t.amount) || t.amount <= 0) continue;
     // Money dated in the future has not arrived. Counting it would put it in
     // "Available to spend" today. A row with no usable date counts, as before.
     const at = t.date ? new Date(t.date).getTime() : NaN;
     if (Number.isFinite(at) && at > nowMs) continue;
     if (t.type === "expense") m.set(t.walletId, roundCents((m.get(t.walletId) ?? 0) - t.amount));
     else if (t.type === "income") m.set(t.walletId, roundCents((m.get(t.walletId) ?? 0) + t.amount));
-    else {
+    else if (t.type === "transfer") {
       m.set(t.walletId, roundCents((m.get(t.walletId) ?? 0) - t.amount));
       if (t.toWalletId != null) m.set(t.toWalletId, roundCents((m.get(t.toWalletId) ?? 0) + t.amount));
     }
@@ -61,7 +65,6 @@ export function netWorthFromBalances(
     .sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
 }
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const DAYS_PER_YEAR = 365;
 
 /** Local calendar day (midnight in the runtime's own timezone) a Date falls
@@ -75,25 +78,8 @@ function localDayStart(d: Date): number {
 }
 
 /**
- * Compound-grow a balance by an annual rate from `since` to `now`. Display-
- * only projection (see Wallet.roiAnnualPct) — never persisted as a
- * transaction. Steps once per whole LOCAL calendar day that has elapsed
- * since `since` — never mid-day, so it never shows a "live" number ticking
- * up before a full day has actually passed on the user's own clock. Zero/
- * negative elapsed days or a non-positive rate returns the balance
- * unchanged (no growth on debt-shaped balances by accident).
- */
-export function growBalance(balance: number, roiAnnualPct: number | undefined, since: Date, now: Date): number {
-  if (!roiAnnualPct || roiAnnualPct <= 0 || balance <= 0) return balance;
-  const days = (localDayStart(now) - localDayStart(since)) / MS_PER_DAY;
-  if (days <= 0) return balance;
-  const years = days / DAYS_PER_YEAR;
-  return roundCents(balance * Math.pow(1 + roiAnnualPct / 100, years));
-}
-
-/**
- * Apply ROI growth (see growBalance) on top of ledger balances, for every
- * wallet that has roiAnnualPct set. Wallets without it pass through
+ * Apply ROI growth on top of ledger balances, for every wallet that has
+ * roiAnnualPct set. Wallets without it pass through
  * unchanged. `now` is injectable for tests.
  *
  * Interest accrues one day at a time on the balance actually held that day,
@@ -109,7 +95,9 @@ export function growBalance(balance: number, roiAnnualPct: number | undefined, s
  * with the balances map it is handed.
  */
 export function computeGrownBalances(
-  wallets: Pick<Wallet, "id" | "roiAnnualPct" | "roiRateSince" | "openingDate" | "createdAt">[],
+  wallets: (Pick<Wallet, "id" | "roiAnnualPct" | "roiRateSince" | "openingDate" | "createdAt"> & {
+    kind?: Wallet["kind"];
+  })[],
   balances: Map<string, number>,
   transactions: Pick<Transaction, "type" | "amount" | "walletId" | "toWalletId" | "date">[],
   now: Date = new Date()
@@ -119,6 +107,9 @@ export function computeGrownBalances(
 
   for (const w of wallets) {
     if (!w.roiAnnualPct || w.roiAnnualPct <= 0 || w.id == null) continue;
+    // A card is a debt instrument, not a deposit: the form never offers it a
+    // rate, so one arriving here is damage and must not accrue interest.
+    if (w.kind === "card") continue;
 
     // Growth never starts before the rate did, so a rate change stays
     // prospective: days already elapsed under the old rate are not re-priced.
@@ -133,13 +124,13 @@ export function computeGrownBalances(
     // Signed movement per local day, for this wallet only.
     const byDay = new Map<number, number>();
     for (const t of transactions) {
-      if (!Number.isFinite(t.amount) || t.amount === 0) continue;
+      if (!Number.isFinite(t.amount) || t.amount <= 0) continue;
       let delta = 0;
       if (t.type === "expense") {
         if (t.walletId === w.id) delta -= t.amount;
       } else if (t.type === "income") {
         if (t.walletId === w.id) delta += t.amount;
-      } else {
+      } else if (t.type === "transfer") {
         if (t.walletId === w.id) delta -= t.amount;
         if (t.toWalletId === w.id) delta += t.amount;
       }

@@ -261,6 +261,33 @@ describe("countsTowardBudget", () => {
   });
 });
 
+describe("guards shared with computeBalances", () => {
+  const ref = new Date("2026-09-15T12:00:00");
+
+  it("bucketize ignores an unknown type and a negative amount", () => {
+    const { totalIn, totalOut } = bucketize(
+      "month",
+      [
+        { type: "expense", amount: 100, currency: "USD", date: "2026-09-10T12:00:00" },
+        { type: "bogus", amount: 500, currency: "USD", date: "2026-09-11T12:00:00" } as never,
+        { type: "expense", amount: -250, currency: "USD", date: "2026-09-12T12:00:00" },
+      ],
+      "USD",
+      ref
+    );
+    // An unknown type used to land in the income bucket.
+    expect(totalIn).toBe(0);
+    expect(totalOut).toBe(100);
+  });
+
+  it("treats a recurring item with an unreadable date as not due", () => {
+    // Firing on it posts a row with a nonsense date and then throws in the
+    // formatter, on every launch.
+    expect(isRecurringDue({ nextDate: "not a date" }, ref)).toBe(false);
+    expect(isRecurringDue({ nextDate: "" }, ref)).toBe(false);
+  });
+});
+
 describe("isDuplicateEntry", () => {
   const now = new Date("2026-09-15T12:00:00.000Z");
   const candidate = {
@@ -288,7 +315,7 @@ describe("isDuplicateEntry", () => {
   });
 
   it("treats a missing note and an empty note as the same", () => {
-    const { note: _drop, ...noNote } = candidate;
+    const noNote = { ...candidate, note: undefined };
     expect(isDuplicateEntry({ ...noNote, createdAt: "2026-09-15T11:59:58.000Z" }, noNote, now)).toBe(true);
     expect(isDuplicateEntry({ ...noNote, createdAt: "2026-09-15T11:59:58.000Z", note: "" }, noNote, now)).toBe(true);
   });

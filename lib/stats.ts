@@ -121,6 +121,11 @@ export function bucketize(range: StatsRange, txs: BucketTx[], currency: Currency
 
   for (const t of txs) {
     if (t.type === "transfer") continue;
+    // Same ledger invariants as computeBalances: magnitudes only, and no
+    // reading at all for a type the app never writes. Without this the two
+    // money paths disagree about what they will accept.
+    if (!Number.isFinite(t.amount) || t.amount <= 0) continue;
+    if (t.type !== "expense" && t.type !== "income") continue;
     const ts = new Date(t.date).getTime();
     if (isNaN(ts)) continue;
     if (t.currency !== currency) {
@@ -314,7 +319,13 @@ export function isRecurringDue(
   now: Date
 ): boolean {
   if (item.active === false) return false;
-  return !(new Date(item.nextDate) > now);
+  // An unreadable date is not "overdue now". Firing on it posts a row with a
+  // nonsense date and then throws in the caller that formats it, on every
+  // launch, for an item the user cannot see is broken. Skipping is recoverable
+  // (editing the item rewrites nextDate); throwing every time is not.
+  const at = new Date(item.nextDate).getTime();
+  if (!Number.isFinite(at)) return false;
+  return at <= now.getTime();
 }
 
 export function advanceRecurringPastNow(

@@ -572,7 +572,9 @@ describe("parseBackup / importJSON", () => {
     (obj.wallets as Record<string, unknown>[])[0].name = evil;
     (obj.categories as Record<string, unknown>[])[0].name = evil;
     (obj.transactions as Record<string, unknown>[])[0].note = evil;
-    (obj.wallets as Record<string, unknown>[]).push(JSON.parse('{"__proto__":{"polluted":true},"name":"p","currency":"CRC"}'));
+    (obj.wallets as Record<string, unknown>[]).push(
+      JSON.parse('{"__proto__":{"polluted":true},"name":"p","currency":"CRC","kind":"cash"}')
+    );
     await importJSON(JSON.stringify(obj));
     // Passed through verbatim as inert strings — rendering is JSX text (auto-escaped).
     expect(mocks.wallets.bulkPut).toHaveBeenCalledWith(
@@ -584,6 +586,30 @@ describe("parseBackup / importJSON", () => {
     // JSON.parse creates an OWN __proto__ property; the prototype is untouched.
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     expect(Object.prototype.hasOwnProperty.call({}, "polluted")).toBe(false);
+  });
+
+  it("refuses a backup whose enums the app would silently act on", () => {
+    // "daily" is not a frequency this app writes; advanceRecurring falls
+    // through to the yearly branch and schedules the wrong day.
+    const freq = validBackupJSON({
+      recurring: [
+        {
+          id: "e5f6a7b8-c9d0-4e1f-8a3b-4c5d6e7f8091",
+          label: "Rent", type: "expense", amount: 1000, currency: "USD",
+          walletId: "3f2a1b4c-9d8e-4f7a-b6c5-d4e3f2a1b098",
+          frequency: "daily", nextDate: "2026-10-01T00:00:00.000Z", createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    });
+    expect(() => parseBackup(freq)).toThrow(/invalid frequency/i);
+
+    const badKind = JSON.parse(validBackupJSON()) as Record<string, unknown>;
+    (badKind.wallets as Record<string, unknown>[])[0].kind = "crypto";
+    expect(() => parseBackup(JSON.stringify(badKind))).toThrow(/wallet entry 1 has an invalid kind/i);
+
+    const badCategory = JSON.parse(validBackupJSON()) as Record<string, unknown>;
+    (badCategory.categories as Record<string, unknown>[])[0].kind = "sideways";
+    expect(() => parseBackup(JSON.stringify(badCategory))).toThrow(/category entry 1 has an invalid kind/i);
   });
 
   it("round-trips Recurring with anchorDay and endDate: new fields preserved", async () => {
@@ -957,6 +983,38 @@ describe("parseTransactionsCSV", () => {
     const { transactions, errors } = parseTransactionsCSV(csv, mockWallets, mockCategories);
     expect(errors).toHaveLength(0);
     expect(transactions[0].categoryId).toBe("c9");
+  });
+
+  it("round-trips a note that looks like a formula without keeping the apostrophe", () => {
+    // The export prefixes "'" to defensively neutralise = + - @ cells. Without
+    // undoing it on import, "=2+2" gains a permanent apostrophe.
+    const original = [
+      { date: "2026-09-01", type: "expense" as const, amount: 10, currency: "USD", wallet: "Cash", toWallet: "", category: "Food", note: "=2+2" },
+    ];
+    const csv = transactionsToCSV(original);
+    expect(csv).toContain("'=2+2");
+    const { transactions, errors } = parseTransactionsCSV(csv, mockWallets, mockCategories);
+    expect(errors).toHaveLength(0);
+    expect(transactions[0].note).toBe("=2+2");
+  });
+
+  it("round-trips every cell csvCell escapes, including a leading apostrophe", () => {
+    // The pair has to be an exact inverse or each pass mangles the note again.
+    const notes = ["=2+2", "+1", "-3", "@here", " =2+2", "'don't", "'=x", "'"];
+    const original = notes.map((note, i) => ({
+      date: "2026-09-01", type: "expense" as const, amount: 10 + i, currency: "USD",
+      wallet: "Cash", toWallet: "", category: "Food", note,
+    }));
+    const { transactions, errors } = parseTransactionsCSV(transactionsToCSV(original), mockWallets, mockCategories);
+    expect(errors).toHaveLength(0);
+    expect(transactions.map((t) => t.note)).toEqual(notes);
+  });
+
+  it("leaves a leading apostrophe that is not neutralisation alone", () => {
+    const csv = 'date,type,amount,currency,wallet,to_wallet,category,note\n"2026-09-01","expense","10","USD","Cash","","Food","' + "'don't" + '"';
+    const { transactions, errors } = parseTransactionsCSV(csv, mockWallets, mockCategories);
+    expect(errors).toHaveLength(0);
+    expect(transactions[0].note).toBe("'don't");
   });
 
   it("handles malformed CSV gracefully (returns errors, doesn't throw)", () => {
