@@ -588,6 +588,16 @@ describe("parseBackup / importJSON", () => {
     expect(Object.prototype.hasOwnProperty.call({}, "polluted")).toBe(false);
   });
 
+  it("refuses a transaction whose date cannot be read", () => {
+    // computeBalances counts such a row and computeGrownBalances drops it, so
+    // letting one in makes the two money paths disagree about the same ledger.
+    for (const date of [undefined, "", "2026-13-45", 42]) {
+      const backup = JSON.parse(validBackupJSON()) as Record<string, unknown>;
+      (backup.transactions as Record<string, unknown>[])[0].date = date;
+      expect(() => parseBackup(JSON.stringify(backup))).toThrow(/transaction 1 has an invalid date/i);
+    }
+  });
+
   it("refuses a backup whose enums the app would silently act on", () => {
     // "daily" is not a frequency this app writes; advanceRecurring falls
     // through to the yearly branch and schedules the wrong day.

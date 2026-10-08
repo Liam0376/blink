@@ -232,6 +232,13 @@ export function parseBackup(text: string): ParsedBackup {
     if (typeof t.amount !== "number" || !Number.isFinite(t.amount) || t.amount <= 0) {
       throw new Error(`The backup is damaged: transaction ${i + 1} has an invalid amount.`);
     }
+    // The date decides whether a row counts toward the balance and which day it
+    // compounds on. computeBalances tolerates an unreadable date by counting the
+    // row anyway, while computeGrownBalances drops it, so a row like that makes
+    // the two disagree. Refuse it here instead of arbitrating in the money math.
+    if (typeof t.date !== "string" || Number.isNaN(new Date(t.date).getTime())) {
+      throw new Error(`The backup is damaged: transaction ${i + 1} has an invalid date.`);
+    }
   }
 
   // Enums the scheduler and the money math branch on. A frequency the app
